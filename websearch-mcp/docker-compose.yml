@@ -18,6 +18,7 @@ services:
     env_file:
       - .env
     networks:
+      - ollama-tools
       - searxng
     logging:
       driver: "json-file"
