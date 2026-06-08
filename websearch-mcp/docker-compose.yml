@@ -1,0 +1,28 @@
+services:
+  websearch-mcp:
+    build: .
+    container_name: websearch-mcp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9200:9200"
+    environment:
+      - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
+      - SEARXNG_TIMEOUT=${SEARXNG_TIMEOUT:-15}
+      - USE_SEARXNG_SEARCH=${USE_SEARXNG_SEARCH:-yes}
+      - USE_DUCKDUCKGO_SEARCH=${USE_DUCKDUCKGO_SEARCH:-no}
+      - TIKA_SERVER_URL=${TIKA_SERVER_URL:-http://tika:9998}
+      - PAGE_FETCH_TIMEOUT=${PAGE_FETCH_TIMEOUT:-15}
+      - PAGE_MAX_CONTENT_LENGTH=${PAGE_MAX_CONTENT_LENGTH:-50000}
+      - MCP_HOST=${MCP_HOST:-0.0.0.0}
+      - MCP_PORT=${MCP_PORT:-9200}
+    env_file:
+      - .env
+    networks:
+      - ollama-tools
+      - searxng
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
