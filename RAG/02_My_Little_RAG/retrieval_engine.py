@@ -1,28 +1,13 @@
 import os
-import hashlib
-import math
 from typing import Optional, List, Dict, Any
-from collections import Counter
-import re
 
 from qdrant_client import QdrantClient
+from qdrant_client import models
 from qdrant_client.http.models import (
-    Distance,
-    VectorParams,
-    PointStruct,
-    TextIndexParams,
     Filter,
     FieldCondition,
-    MatchText,
     MatchValue,
-    FilterSelector,
-    SparseVectorParams,
-    SparseVector,
-    QueryRequest,
-    Fusion,
-    RecommendInput
 )
-from qdrant_client.models import Query
 from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
 
@@ -47,80 +32,16 @@ OPENAI_BASE_URL = os.getenv("OPENAI_RETRIVAL_URL")
 # Ollama
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 
-# Sparse vector configuration
-SPARSE_INDEX_SPACE = int(os.getenv("SPARSE_INDEX_SPACE", 100000))  # Same as previous hash space
+# BM25 configuration
+BM25_LANGUAGE = os.getenv("BM25_LANGUAGE", "german")
 
-def stable_term_index(term: str, mod=SPARSE_INDEX_SPACE) -> int:
-    """Stable, cross-process deterministic hash -> index."""
-    # md5 returns hex; convert to int
-    h = hashlib.md5(term.encode('utf-8')).hexdigest()
-    return int(h, 16) % mod
-
-def generate_sparse_vector(text):
-    """Generate a sparse vector representation of text with improved term weighting"""
-    if not text or not text.strip():
-        return SparseVector(indices=[], values=[])
-
-    # Enhanced tokenization to handle German characters and special symbols including legal notation like §98
-    # This pattern captures:
-    # 1. § followed by optional whitespace and numbers (e.g., "§ 98", "§98") as single tokens
-    # 2. Words that may contain special symbols
-    # 3. Numbers
-    # 4. Other word-like tokens
-    tokens = re.findall(r'(?:§\s*\d+|[a-zA-ZäöüÄÖÜß§]+\d*|\d+[a-zA-ZäöüÄÖÜß§]*|[a-zA-ZäöüÄÖÜß§]+)', text.lower())
-
-    # Keep only terms with length >= 2 (no stopwords filtering to match ingestion service)
-    filtered_tokens = [token for token in tokens if len(token) >= 2]
-
-    if not filtered_tokens:
-        return SparseVector(indices=[], values=[])
-
-    # Count term frequencies
-    tf = Counter(filtered_tokens)
-
-    # Calculate TF-IDF like weighting to give more importance to rare terms
-    # For now, using a simple approach where more frequent terms in the document get
-    # a boost, but we also want to avoid overwhelming very common terms
-    total_terms = len(filtered_tokens)
-    index_values = {}
-
-    # Create indices based on stable hash of terms (to maintain consistency)
-    # Handle potential hash collisions by summing frequencies
-    for term, freq in tf.items():
-        # Create a stable hash-based index for the term
-        term_hash = stable_term_index(term)  # Limit index space
-
-        # Apply a log-based weight to reduce the impact of very frequent terms
-        # This is a simplified TF-IDF approach
-        log_weight = 1 + math.log(freq)  # Adding 1 to avoid log(0)
-
-        # If index already exists, sum the weights (handle hash collisions)
-        if term_hash in index_values:
-            index_values[term_hash] += log_weight
-        else:
-            index_values[term_hash] = log_weight
-
-    # Convert to lists and sort by indices for Qdrant sparse vector format
-    if index_values:
-        # Sort by indices to maintain consistent order
-        sorted_items = sorted(index_values.items())
-        indices, values = zip(*sorted_items)
-        indices = list(indices)
-        values = list(values)
-
-        # Apply min-max normalization to ensure consistent value range
-        min_val, max_val = min(values), max(values)
-        if max_val > min_val:
-            # Normalize to [0, 1] range
-            values = [(v - min_val) / (max_val - min_val) for v in values]
-        else:
-            # If all values are the same, set them to 1.0
-            values = [1.0 for _ in values]
-    else:
-        indices = []
-        values = []
-
-    return SparseVector(indices=indices, values=values)
+def _build_bm25_query(text: str):
+    options = {"language": BM25_LANGUAGE.lower()} if BM25_LANGUAGE and BM25_LANGUAGE.lower() != "none" else None
+    return models.Document(
+        text=text,
+        model="qdrant/bm25",
+        options=options,
+    )
 
 def get_embedding_function():
     """Get the appropriate embedding function based on the provider"""
@@ -238,20 +159,11 @@ class RetrievalEngine:
             List of search results with id, score, payload, and content
         """
         try:
-            # Use the specified collection or default to the main collection
             collection_to_search = collection_name if collection_name else QDRANT_COLLECTION
 
-            # Get embedding function and create dense vector
             dense_vector = self.embedding_func.embed_query(query)
 
-            # Create sparse vector from the query
-            sparse_vector = generate_sparse_vector(query)
-
-            # Attempt Qdrant's native hybrid search using the query endpoint with fusion
             try:
-                # Use Qdrant's native hybrid search capability with Prefetch
-                from qdrant_client import models
-
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     prefetch=[
@@ -261,7 +173,7 @@ class RetrievalEngine:
                             limit=top_k * 2,
                         ),
                         models.Prefetch(
-                            query=sparse_vector,  # Pass SparseVector object directly
+                            query=_build_bm25_query(query),
                             using="sparse",
                             limit=top_k * 3,
                         ),
@@ -269,27 +181,25 @@ class RetrievalEngine:
                     query=models.FusionQuery(fusion=models.Fusion.RRF),
                     limit=top_k,
                     with_payload=True
-                ).points  # Access the points from the response
+                ).points
 
             except Exception as e:
                 print(f"Native hybrid search failed: {e}")
-                # Fall back to simple dense vector search only
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     query=dense_vector,
                     query_filter=None,
                     limit=top_k,
                     with_payload=True
-                ).points  # Access the points from the response
+                ).points
 
-            # Format results - return only essential information
             results = [
                 {
                     "rank": idx + 1,
                     "score": point.score,
-                    "content": point.payload.get("text", "") if point.payload else "",  # Use "text" from payload (now contains full paragraph)
-                    "file_name": point.payload.get("source", "") if point.payload else "",  # Include file name
-                    "collection_name": collection_to_search  # Include collection name in the result
+                    "content": point.payload.get("text", "") if point.payload else "",
+                    "file_name": point.payload.get("source", "") if point.payload else "",
+                    "collection_name": collection_to_search
                 }
                 for idx, point in enumerate(search_result)
             ]
@@ -322,30 +232,20 @@ class RetrievalEngine:
             List of search results with id, score, payload, and content from the specified file
         """
         try:
-            # Use the specified collection or default to the main collection
             collection_to_search = collection_name if collection_name else QDRANT_COLLECTION
 
-            # Get embedding function and create dense vector
             dense_vector = self.embedding_func.embed_query(query)
 
-            # Create sparse vector from the query
-            sparse_vector = generate_sparse_vector(query)
-
-            # Create a filter to limit search to the specific file
             file_filter = Filter(
                 must=[
                     FieldCondition(
-                        key="source",  # Using the correct field name from payload
+                        key="source",
                         match=MatchValue(value=file_name)
                     )
                 ]
             )
 
-            # Attempt Qdrant's native hybrid search using the query endpoint with fusion and filter
             try:
-                # Use Qdrant's native hybrid search capability with file filter
-                from qdrant_client import models
-
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     prefetch=[
@@ -356,7 +256,7 @@ class RetrievalEngine:
                             filter=file_filter,
                         ),
                         models.Prefetch(
-                            query=sparse_vector,  # Pass SparseVector object directly
+                            query=_build_bm25_query(query),
                             using="sparse",
                             limit=top_k * 3,
                             filter=file_filter,
@@ -365,26 +265,24 @@ class RetrievalEngine:
                     query=models.FusionQuery(fusion=models.Fusion.RRF),
                     limit=top_k,
                     with_payload=True
-                ).points  # Access the points from the response
+                ).points
 
             except Exception as e:
                 print(f"Native hybrid search failed: {e}")
-                # Fall back to simple dense vector search with file filter only
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     query=dense_vector,
                     limit=top_k,
                     with_payload=True
-                ).points  # Access the points from the response
+                ).points
 
-            # Format results - return only essential information
             results = [
                 {
                     "rank": idx + 1,
                     "score": point.score,
-                    "content": point.payload.get("text", "") if point.payload else "",  # Use "text" from payload (now contains full paragraph)
-                    "file_name": point.payload.get("source", "") if point.payload else "",  # Include file name
-                    "collection_name": collection_to_search  # Include collection name in the result
+                    "content": point.payload.get("text", "") if point.payload else "",
+                    "file_name": point.payload.get("source", "") if point.payload else "",
+                    "collection_name": collection_to_search
                 }
                 for idx, point in enumerate(search_result)
             ]
@@ -403,8 +301,7 @@ class RetrievalEngine:
         collection_name: str = None
     ) -> List[dict]:
         """
-        Text-only search using sparse vectors across all documents in the Qdrant collection.
-        This performs keyword-based search using sparse vector representation of the query.
+        Text-only search using native BM25 sparse vectors across all documents in the Qdrant collection.
 
         Args:
             query: The search query text
@@ -416,31 +313,23 @@ class RetrievalEngine:
             List of search results with id, score, payload, and content
         """
         try:
-            # Use the specified collection or default to the main collection
             collection_to_search = collection_name if collection_name else QDRANT_COLLECTION
 
-            # Create sparse vector from the query
-            sparse_vector = generate_sparse_vector(query)
-
-            # Perform search using only the sparse vector
-            # For sparse vector search, we need to pass the sparse vector in the correct format
-            # The sparse vector should be passed with the proper structure
             search_result = self.client.query_points(
                 collection_name=collection_to_search,
-                query=sparse_vector,
-                using="sparse",  # Specify that we want to use the sparse vector configuration
+                query=_build_bm25_query(query),
+                using="sparse",
                 limit=top_k,
                 with_payload=True
-            ).points  # Access the points from the response
+            ).points
 
-            # Format results - return only essential information
             results = [
                 {
                     "rank": idx + 1,
                     "score": point.score,
-                    "content": point.payload.get("text", "") if point.payload else "",  # Use "text" from payload (now contains full paragraph)
-                    "file_name": point.payload.get("source", "") if point.payload else "",  # Include file name
-                    "collection_name": collection_to_search  # Include collection name in the result
+                    "content": point.payload.get("text", "") if point.payload else "",
+                    "file_name": point.payload.get("source", "") if point.payload else "",
+                    "collection_name": collection_to_search
                 }
                 for idx, point in enumerate(search_result)
             ]
@@ -460,8 +349,7 @@ class RetrievalEngine:
         collection_name: str = None
     ) -> List[dict]:
         """
-        Text-only search using sparse vectors within a specific file in the Qdrant collection.
-        This performs keyword-based search using sparse vector representation of the query.
+        Text-only search using native BM25 sparse vectors within a specific file in the Qdrant collection.
 
         Args:
             query: The search query text
@@ -474,45 +362,33 @@ class RetrievalEngine:
             List of search results with id, score, payload, and content from the specified file
         """
         try:
-            # Use the specified collection or default to the main collection
             collection_to_search = collection_name if collection_name else QDRANT_COLLECTION
 
-            # Create sparse vector from the query
-            sparse_vector = generate_sparse_vector(query)
-
-            # Create a filter to limit search to the specific file
             file_filter = Filter(
                 must=[
                     FieldCondition(
-                        key="source",  # Using the correct field name from payload
+                        key="source",
                         match=MatchValue(value=file_name)
                     )
                 ]
             )
 
-            # Perform search using only the sparse vector with file filter
             search_result = self.client.query_points(
                 collection_name=collection_to_search,
-                prefetch=[
-                    models.Prefetch(
-                        query=sparse_vector,
-                        using="sparse",
-                        limit=top_k,
-                        filter=file_filter,
-                    ),
-                ],
+                query=_build_bm25_query(query),
+                using="sparse",
+                query_filter=file_filter,
                 limit=top_k,
                 with_payload=True
-            ).points  # Access the points from the response
+            ).points
 
-            # Format results - return only essential information
             results = [
                 {
                     "rank": idx + 1,
                     "score": point.score,
-                    "content": point.payload.get("text", "") if point.payload else "",  # Use "text" from payload (now contains full paragraph)
-                    "file_name": point.payload.get("source", "") if point.payload else "",  # Include file name
-                    "collection_name": collection_to_search  # Include collection name in the result
+                    "content": point.payload.get("text", "") if point.payload else "",
+                    "file_name": point.payload.get("source", "") if point.payload else "",
+                    "collection_name": collection_to_search
                 }
                 for idx, point in enumerate(search_result)
             ]

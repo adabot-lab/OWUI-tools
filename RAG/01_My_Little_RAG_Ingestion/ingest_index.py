@@ -3,12 +3,11 @@ import json
 import hashlib
 import time
 import uuid
-import math
 from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 from pathlib import Path
 from bs4 import BeautifulSoup
-from collections import Counter, defaultdict
+from collections import defaultdict
 import re
 import threading
 
@@ -16,7 +15,8 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, TextIndexParams, Filter, FieldCondition, MatchValue, FilterSelector, SparseVectorParams, SparseVector
+from qdrant_client import models
+from qdrant_client.models import Distance, VectorParams, PointStruct, TextIndexParams, Filter, FieldCondition, MatchValue, FilterSelector, SparseVectorParams
 
 # Configuration
 # folder and file storage
@@ -93,83 +93,13 @@ class Logger:
 
 logger = Logger()
 
-# Sparse vector configuration
-SPARSE_INDEX_SPACE = int(os.getenv("SPARSE_INDEX_SPACE", 100000))  # Same as previous hash space
+# BM25 configuration
+BM25_LANGUAGE = os.getenv("BM25_LANGUAGE", "german")
 
 # Semaphore to limit concurrent embedding requests to prevent server overload
 # With larger ubatch-size, we can process more requests safely, but still want some control
 embedding_semaphore = threading.Semaphore(4)  # Allow up to 4 concurrent embedding requests
 
-
-def stable_term_index(term: str, mod: int = SPARSE_INDEX_SPACE) -> int:
-    """Stable, cross-process deterministic hash -> index."""
-    # md5 returns hex; convert to int
-    h = hashlib.md5(term.encode('utf-8')).hexdigest()
-    return int(h, 16) % mod
-
-def generate_sparse_vector(text: str) -> SparseVector:
-    """Generate a sparse vector representation of text with improved term weighting"""
-    if not text or not text.strip():
-        return SparseVector(indices=[], values=[])
-    
-    # Enhanced tokenization to handle German characters and special symbols including legal notation like §98
-    # This pattern captures:
-    # 1. § followed by optional whitespace and numbers (e.g., "§ 98", "§98") as single tokens
-    # 2. Words that may contain special symbols
-    # 3. Numbers
-    # 4. Other word-like tokens
-    tokens = re.findall(r'(?:§\s*\d+|[a-zA-ZäöüÄÖÜß§]+\d*|\d+[a-zA-ZäöüÄÖÜß§]*|[a-zA-ZäöüÄÖÜß§]+)', text.lower())
-    
-    # Remove stopwords and short terms
-    filtered_tokens = [token for token in tokens if len(token) >= 2]
-    
-    if not filtered_tokens:
-        return SparseVector(indices=[], values=[])
-
-    # Count term frequencies
-    tf = Counter(filtered_tokens)
-
-    # Calculate TF-IDF like weighting to give more importance to rare terms
-    total_terms = len(filtered_tokens)
-    index_values = {}
-
-    # Create indices based on stable hash of terms (to maintain consistency)
-    # Handle potential hash collisions by summing frequencies
-    for term, freq in tf.items():
-        # Create a stable hash-based index for the term
-        term_hash = stable_term_index(term)  # Limit index space
-
-        # Apply a log-based weight to reduce the impact of very frequent terms
-        # This is a simplified TF-IDF approach
-        log_weight = 1 + math.log(freq)  # Adding 1 to avoid log(0)
-
-        # If index already exists, sum the weights (handle hash collisions)
-        if term_hash in index_values:
-            index_values[term_hash] += log_weight
-        else:
-            index_values[term_hash] = log_weight
-
-    # Convert to lists and sort by indices for Qdrant sparse vector format
-    if index_values:
-        # Sort by indices to maintain consistent order
-        sorted_items = sorted(index_values.items())
-        indices, values = zip(*sorted_items)
-        indices = list(indices)
-        values = list(values)
-
-        # Apply min-max normalization to ensure consistent value range
-        min_val, max_val = min(values), max(values)
-        if max_val > min_val:
-            # Normalize to [0, 1] range
-            values = [(v - min_val) / (max_val - min_val) for v in values]
-        else:
-            # If all values are the same, set them to 1.0
-            values = [1.0 for _ in values]
-    else:
-        indices = []
-        values = []
-
-    return SparseVector(indices=indices, values=values)
 
 def load_file_metadata() -> Dict[str, Any]:
     """Load file metadata from disk"""
@@ -1009,7 +939,9 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
                         ),
                     },
                     sparse_vectors_config={
-                        "sparse": SparseVectorParams()
+                        "sparse": SparseVectorParams(
+                            modifier=models.Modifier.IDF,
+                        )
                     },
                     hnsw_config={
                         "m": 16,
@@ -1041,7 +973,9 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
                         ),
                     },
                     sparse_vectors_config={
-                        "sparse": SparseVectorParams()
+                        "sparse": SparseVectorParams(
+                            modifier=models.Modifier.IDF,
+                        )
                     },
                     # Optimize for better performance
                     hnsw_config={
@@ -1135,7 +1069,9 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
                         ),
                     },
                     sparse_vectors_config={
-                        "sparse": SparseVectorParams()
+                        "sparse": SparseVectorParams(
+                            modifier=models.Modifier.IDF,
+                        )
                     },
                     # Optimize for better performance
                     hnsw_config={
@@ -1297,20 +1233,23 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
                         if not valid_chunks:
                             break  # No valid chunks in batch
 
+                        bm25_options = {"language": BM25_LANGUAGE.lower()} if BM25_LANGUAGE and BM25_LANGUAGE.lower() != "none" else None
+
                         # Generate sparse vectors and create points
                         points = []
                         for chunk, dense_vector in zip(valid_chunks, valid_dense_vectors):
-                            # Use paragraph for embeddings
-                            sparse_vector = generate_sparse_vector(chunk["text"])
-
                             point = PointStruct(
                                 id=str(uuid.uuid4()),
                                 vector={
                                     "dense": dense_vector,
-                                    "sparse": sparse_vector
+                                    "sparse": models.Document(
+                                        text=chunk["text"],
+                                        model="qdrant/bm25",
+                                        options=bm25_options,
+                                    )
                                 },
                                 payload={
-                                    "text": chunk["text"],      # paragraph
+                                    "text": chunk["text"],
                                     "doc_id": chunk["doc_id"],
                                     "chunk_id": chunk["chunk_id"],
                                     "source": chunk["source"],

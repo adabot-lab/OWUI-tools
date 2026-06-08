@@ -40,6 +40,8 @@ services:
       - CHUNK_OVERLAP=${CHUNK_OVERLAP}
       # Force reindex (set to "true" to reindex all documents)
       - FORCE_REINDEX=false
+      # BM25 text search language
+      - BM25_LANGUAGE=${BM25_LANGUAGE:-german}
     networks:
       - ollama-tools
 
