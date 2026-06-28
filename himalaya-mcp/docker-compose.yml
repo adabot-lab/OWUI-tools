@@ -1,0 +1,28 @@
+services:
+  himalaya-mcp:
+    build: .
+    container_name: himalaya-mcp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9201:9201"
+    environment:
+      - MCP_HOST=${MCP_HOST:-0.0.0.0}
+      - MCP_PORT=${MCP_PORT:-9201}
+      - HIMALAYA_CONFIG_DIR=/config/himalaya
+      - DEFAULT_ACCOUNT=${DEFAULT_ACCOUNT:-main}
+      - DRAFTS_FOLDER=${DRAFTS_FOLDER:-Drafts}
+      - DATA_DIR=/data
+    volumes:
+      - ./config:/config/himalaya:ro
+      - ./data:/data
+    networks:
+      - owui-tools
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: 3
+
+networks:
+  owui-tools:
+    external: true

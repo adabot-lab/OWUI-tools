@@ -24,3 +24,13 @@ secrets.*
 # --- Local config overrides ---
 *.local
 config.local.*
+
+# --- Himalaya live config + credentials (himalaya-mcp) ---
+himalaya-mcp/config/
+himalaya-mcp/config/config.toml
+himalaya-mcp/password
+himalaya-mcp/password.*
+himalaya-mcp/data/
+
+# Allow safe templates
+!himalaya-mcp/config.example.toml
