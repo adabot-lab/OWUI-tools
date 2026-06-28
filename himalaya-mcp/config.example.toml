@@ -1,0 +1,14 @@
+[accounts.main]
+default = true
+email = "user@example.com"
+display-name = "Your Name"
+downloads-dir = "/data"
+backend.type = "imap"
+backend.host = "imap.example.com"
+backend.port = 993
+backend.login = "user@example.com"
+backend.encryption.type = "tls"
+backend.auth.type = "password"
+backend.auth.raw = "YOUR_PASSWORD_HERE"
+
+# NO message.send.backend section — SMTP deliberately omitted
