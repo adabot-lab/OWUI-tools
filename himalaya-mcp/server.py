@@ -122,9 +122,9 @@ async def envelope_list(
     Query examples: 'not flag seen', 'from sender@example.com',
     'subject invoice', 'before 2026-01-01'."""
     args = ["envelope", "list", *_acc(account), "-f", folder]
+    args.extend(["--page", str(page), "--page-size", str(page_size)])
     if query:
         args.append(query)
-    args.extend(["--page", str(page), "--page-size", str(page_size)])
     result = await _himalaya(*args)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
