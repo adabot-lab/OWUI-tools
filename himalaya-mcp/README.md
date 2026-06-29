@@ -121,6 +121,7 @@ Example output:
 | `MCP_HOST` | `0.0.0.0` | Server bind address |
 | `MCP_PORT` | `9201` | Server port |
 | `HIMALAYA_CONFIG_DIR` | `/config/himalaya` | Himalaya config directory (mounted read-only) |
+| `HIMALAYA_CONFIG_FILE` | `<CONFIG_DIR>/config.toml` | Config **file** path (override to point elsewhere). Himalaya's `--config` expects a file, not a directory. |
 | `DEFAULT_ACCOUNT` | `main` | Default himalaya account name |
 | `DRAFTS_FOLDER` | `Drafts` | IMAP folder for saving drafts |
 | `DATA_DIR` | `/data` | Attachment download directory |

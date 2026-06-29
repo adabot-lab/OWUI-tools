@@ -8,23 +8,57 @@ SMTP deliberately absent from config — structural enforcement.
 import asyncio
 import json
 import os
+import sys
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
 HIMALAYA_BIN = os.getenv("HIMALAYA_BIN", "himalaya")
 HIMALAYA_CONFIG_DIR = os.getenv("HIMALAYA_CONFIG_DIR", "/config/himalaya")
+# Resolve the actual config FILE. Allow a direct override via
+# HIMALAYA_CONFIG_FILE; otherwise expect config.toml inside the dir.
+# himalaya's --config flag takes a FILE, not a directory — passing the
+# directory causes "cannot read config file ... Is a directory".
+HIMALAYA_CONFIG_FILE = os.getenv("HIMALAYA_CONFIG_FILE") or os.path.join(
+    HIMALAYA_CONFIG_DIR, "config.toml"
+)
 DEFAULT_ACCOUNT = os.getenv("DEFAULT_ACCOUNT", "main")
 DRAFTS_FOLDER = os.getenv("DRAFTS_FOLDER", "Drafts")
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", "9201"))
 
+
+def _validate_config_path() -> None:
+    """Fail fast on the classic misconfiguration: resolved path is a directory.
+    A merely missing file is only a warning, so health_check and the MCP
+    handshake still work before live IMAP creds are mounted."""
+    if os.path.isdir(HIMALAYA_CONFIG_FILE):
+        print(
+            "FATAL: HIMALAYA_CONFIG_FILE "
+            f"'{HIMALAYA_CONFIG_FILE}' is a directory, but himalaya "
+            "--config expects a FILE. Point HIMALAYA_CONFIG_DIR at the dir "
+            "containing config.toml, or set HIMALAYA_CONFIG_FILE to the "
+            ".toml file directly.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if not os.path.isfile(HIMALAYA_CONFIG_FILE):
+        print(
+            f"WARNING: config file not found at '{HIMALAYA_CONFIG_FILE}' "
+            f"(dir '{HIMALAYA_CONFIG_DIR}'). IMAP tools will fail until a "
+            "valid config.toml is mounted.",
+            file=sys.stderr,
+        )
+
+
+_validate_config_path()
+
 mcp = FastMCP("himalaya", json_response=True)
 
 
 async def _himalaya(*args) -> dict:
-    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_DIR,
+    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_FILE,
            "--output", "json", "--quiet"] + list(args)
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -38,7 +72,7 @@ async def _himalaya(*args) -> dict:
 
 
 async def _himalaya_stdin(args: list, stdin_data: str) -> dict:
-    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_DIR,
+    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_FILE,
            "--output", "json", "--quiet"] + args
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdin=asyncio.subprocess.PIPE,
@@ -226,6 +260,7 @@ async def health_check() -> str:
         "config": {
             "HIMALAYA_BIN": HIMALAYA_BIN,
             "HIMALAYA_CONFIG_DIR": HIMALAYA_CONFIG_DIR,
+            "HIMALAYA_CONFIG_FILE": HIMALAYA_CONFIG_FILE,
             "DEFAULT_ACCOUNT": DEFAULT_ACCOUNT,
             "DRAFTS_FOLDER": DRAFTS_FOLDER,
             "DATA_DIR": DATA_DIR,
