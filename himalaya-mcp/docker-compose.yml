@@ -4,7 +4,7 @@ services:
     container_name: himalaya-mcp
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9201:9201"
+      - "9201:9201"
     environment:
       - MCP_HOST=${MCP_HOST:-0.0.0.0}
       - MCP_PORT=${MCP_PORT:-9201}
