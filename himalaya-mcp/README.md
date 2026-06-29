@@ -120,7 +120,7 @@ Example output:
 |----------|---------|-------------|
 | `MCP_HOST` | `0.0.0.0` | Server bind address |
 | `MCP_PORT` | `9201` | Server port |
-| `HIMALAYA_CONFIG_DIR` | `/config/himalaya` | Himalaya config directory (mounted read-only) |
+| `HIMALAYA_CONFIG_DIR` | `/config` | Himalaya config directory (mounted read-only) |
 | `HIMALAYA_CONFIG_FILE` | `<CONFIG_DIR>/config.toml` | Config **file** path (override to point elsewhere). Himalaya's `--config` expects a file, not a directory. |
 | `DEFAULT_ACCOUNT` | `main` | Default himalaya account name |
 | `DRAFTS_FOLDER` | `Drafts` | IMAP folder for saving drafts |
@@ -128,11 +128,11 @@ Example output:
 
 ### Config file (`config.toml`)
 
-Mount a `config.toml` at `HIMALAYA_CONFIG_DIR`. See `config.example.toml` for the template. Key requirements:
+Mount a `config.toml` at `HIMALAYA_CONFIG_DIR`. See `config/config.example.toml` for the template. Key requirements:
 
 - **IMAP backend only** — no `[message.send]` / SMTP section
 - Account name must match `DEFAULT_ACCOUNT` (default: `main`)
-- Password via `backend.auth.raw` (inline) or `backend.auth.cmd` (command like `cat /config/himalaya/password`)
+- Password via `backend.auth.raw` (inline) or `backend.auth.cmd` (command like `cat /config/password`)
 
 Example (`config.example.toml`):
 ```toml
@@ -229,7 +229,7 @@ mcp_servers:
 │  └─────────────┘   └────────┬────────┘  │
 │                             │            │
 │  ┌─────────────┐   ┌────────▼────────┐  │
-│  │ /data        │   │ /config/himalaya │  │
+│  │ /data        │   │ /config          │  │
 │  │ (attachments)│   │ (config.toml:ro) │  │
 │  └─────────────┘   └─────────────────┘  │
 └─────────────────────────────────────────┘

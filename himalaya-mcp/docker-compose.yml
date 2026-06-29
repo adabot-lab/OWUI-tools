@@ -8,12 +8,12 @@ services:
     environment:
       - MCP_HOST=${MCP_HOST:-0.0.0.0}
       - MCP_PORT=${MCP_PORT:-9201}
-      - HIMALAYA_CONFIG_DIR=/config/himalaya
+      - HIMALAYA_CONFIG_DIR=/config
       - DEFAULT_ACCOUNT=${DEFAULT_ACCOUNT:-main}
       - DRAFTS_FOLDER=${DRAFTS_FOLDER:-Drafts}
       - DATA_DIR=/data
     volumes:
-      - ./config:/config/himalaya:ro
+      - ./config:/config:ro
       - ./data:/data
     networks:
       - owui-tools

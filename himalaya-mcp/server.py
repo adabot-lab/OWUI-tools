@@ -14,7 +14,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 HIMALAYA_BIN = os.getenv("HIMALAYA_BIN", "himalaya")
-HIMALAYA_CONFIG_DIR = os.getenv("HIMALAYA_CONFIG_DIR", "/config/himalaya")
+HIMALAYA_CONFIG_DIR = os.getenv("HIMALAYA_CONFIG_DIR", "/config")
 # Resolve the actual config FILE. Allow a direct override via
 # HIMALAYA_CONFIG_FILE; otherwise expect config.toml inside the dir.
 # himalaya's --config flag takes a FILE, not a directory — passing the

@@ -7,10 +7,9 @@
 !.env.example
 
 # Himalaya live config + credentials
-config/
-config.toml
-config/*.toml
-!config.example.toml
+# Ignore everything in config/ EXCEPT the example template
+config/*
+!config/config.example.toml
 
 # Password files
 password
