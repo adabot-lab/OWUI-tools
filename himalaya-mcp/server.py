@@ -22,11 +22,28 @@ HIMALAYA_CONFIG_DIR = os.getenv("HIMALAYA_CONFIG_DIR", "/config")
 HIMALAYA_CONFIG_FILE = os.getenv("HIMALAYA_CONFIG_FILE") or os.path.join(
     HIMALAYA_CONFIG_DIR, "config.toml"
 )
-DEFAULT_ACCOUNT = os.getenv("DEFAULT_ACCOUNT", "main")
+# When set, forces a specific account for all tools that don't receive an
+# explicit `account` argument. When empty (default), no `-a` flag is passed
+# and himalaya resolves the account itself (the one with `default = true`).
+DEFAULT_ACCOUNT = os.getenv("DEFAULT_ACCOUNT", "")
 DRAFTS_FOLDER = os.getenv("DRAFTS_FOLDER", "Drafts")
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", "9201"))
+
+
+def _acc(account: Optional[str]) -> list:
+    """Build the -a flag args for himalaya.
+
+    Priority: explicit caller arg > DEFAULT_ACCOUNT env > omit (let
+    himalaya pick the account marked `default = true` in config.toml).
+
+    Passing a wrong account name (e.g. hardcoded "main" when the config
+    defines "assistant") causes: 'cannot find configuration for account'.
+    Omitting -a entirely lets himalaya resolve it correctly.
+    """
+    acc = account or DEFAULT_ACCOUNT
+    return ["-a", acc] if acc else []
 
 
 def _validate_config_path() -> None:
@@ -89,8 +106,7 @@ async def _himalaya_stdin(args: list, stdin_data: str) -> dict:
 @mcp.tool()
 async def folder_list(account: Optional[str] = None) -> str:
     """List all mailboxes/folders for the account."""
-    acc = account or DEFAULT_ACCOUNT
-    result = await _himalaya("folder", "list", "-a", acc)
+    result = await _himalaya("folder", "list", *_acc(account))
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -105,8 +121,7 @@ async def envelope_list(
     """List message envelopes with optional filter query.
     Query examples: 'not flag seen', 'from sender@example.com',
     'subject invoice', 'before 2026-01-01'."""
-    acc = account or DEFAULT_ACCOUNT
-    args = ["envelope", "list", "-a", acc, "-f", folder]
+    args = ["envelope", "list", *_acc(account), "-f", folder]
     if query:
         args.append(query)
     args.extend(["--page", str(page), "--page-size", str(page_size)])
@@ -123,8 +138,7 @@ async def message_read(
 ) -> str:
     """Read message body. Defaults to peek=true (does NOT mark as read).
     Set peek=false to mark as read after reading."""
-    acc = account or DEFAULT_ACCOUNT
-    args = ["message", "read", "-a", acc, "-f", folder, id]
+    args = ["message", "read", *_acc(account), "-f", folder, id]
     if peek:
         args.append("--preview")
     result = await _himalaya(*args)
@@ -142,12 +156,10 @@ async def message_export(
     Since 'message export' has no --preview flag, peek is achieved by
     immediately removing \\Seen flag after export (atomic).
     Exports to a temp dir, reads back the .eml content, cleans up."""
-    acc = account or DEFAULT_ACCOUNT
-    # Export to temp directory, then read content back
     import tempfile, glob, os
     tmpdir = tempfile.mkdtemp(prefix="himalaya_export_")
     result = await _himalaya(
-        "message", "export", "-a", acc, "-f", folder,
+        "message", "export", *_acc(account), "-f", folder,
         "-d", tmpdir, id, "--full")
     # Find the exported .eml file
     eml_files = glob.glob(os.path.join(tmpdir, "*.eml"))
@@ -167,7 +179,7 @@ async def message_export(
         pass
     # Undo auto-Seen from export (atomic, before return)
     if peek and "error" not in result:
-        await _himalaya("flag", "remove", "-a", acc, "-f", folder, id, "seen")
+        await _himalaya("flag", "remove", *_acc(account), "-f", folder, id, "seen")
     output = result if "error" in result else {
         "id": id, "folder": folder,
         "raw_mime": raw_mime, "mime_length": len(raw_mime),
@@ -182,16 +194,14 @@ async def attachment_download(
     account: Optional[str] = None,
 ) -> str:
     """Download all attachments for a message to the data directory."""
-    acc = account or DEFAULT_ACCOUNT
-    result = await _himalaya("attachment", "download", "-a", acc, "-f", folder, "-d", DATA_DIR, id)
+    result = await _himalaya("attachment", "download", *_acc(account), "-f", folder, "-d", DATA_DIR, id)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 async def template_write(account: Optional[str] = None) -> str:
     """Generate a blank MML (Markdown Mail) template for composing."""
-    acc = account or DEFAULT_ACCOUNT
-    result = await _himalaya("template", "write", "-a", acc)
+    result = await _himalaya("template", "write", *_acc(account))
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -202,8 +212,7 @@ async def template_reply(
     account: Optional[str] = None,
 ) -> str:
     """Generate a reply MML template for the given message."""
-    acc = account or DEFAULT_ACCOUNT
-    result = await _himalaya("template", "reply", "-a", acc, "-f", folder, id)
+    result = await _himalaya("template", "reply", *_acc(account), "-f", folder, id)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -214,8 +223,7 @@ async def template_forward(
     account: Optional[str] = None,
 ) -> str:
     """Generate a forward MML template for the given message."""
-    acc = account or DEFAULT_ACCOUNT
-    result = await _himalaya("template", "forward", "-a", acc, "-f", folder, id)
+    result = await _himalaya("template", "forward", *_acc(account), "-f", folder, id)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -227,9 +235,8 @@ async def template_save(
 ) -> str:
     """Compile MML and save to Drafts folder via IMAP APPEND.
     Does NOT send via SMTP — SMTP is not configured in this container."""
-    acc = account or DEFAULT_ACCOUNT
     fld = folder or DRAFTS_FOLDER
-    result = await _himalaya_stdin(["template", "save", "-a", acc, "-f", fld], mml)
+    result = await _himalaya_stdin(["template", "save", *_acc(account), "-f", fld], mml)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -244,9 +251,8 @@ async def flag_set(
     """Add or remove a flag on a message.
     Common flags: 'seen' (\\Seen), 'flagged' (\\Flagged), 'answered' (\\Answered).
     Use add=false to remove the flag."""
-    acc = account or DEFAULT_ACCOUNT
     action = "add" if add else "remove"
-    result = await _himalaya("flag", action, "-a", acc, "-f", folder, id, flag)
+    result = await _himalaya("flag", action, *_acc(account), "-f", folder, id, flag)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -261,7 +267,7 @@ async def health_check() -> str:
             "HIMALAYA_BIN": HIMALAYA_BIN,
             "HIMALAYA_CONFIG_DIR": HIMALAYA_CONFIG_DIR,
             "HIMALAYA_CONFIG_FILE": HIMALAYA_CONFIG_FILE,
-            "DEFAULT_ACCOUNT": DEFAULT_ACCOUNT,
+            "DEFAULT_ACCOUNT": DEFAULT_ACCOUNT or "(himalaya default)",
             "DRAFTS_FOLDER": DRAFTS_FOLDER,
             "DATA_DIR": DATA_DIR,
         },

@@ -9,20 +9,17 @@ services:
       - MCP_HOST=${MCP_HOST:-0.0.0.0}
       - MCP_PORT=${MCP_PORT:-9201}
       - HIMALAYA_CONFIG_DIR=/config
-      - DEFAULT_ACCOUNT=${DEFAULT_ACCOUNT:-main}
+      - DEFAULT_ACCOUNT=${DEFAULT_ACCOUNT:-}
       - DRAFTS_FOLDER=${DRAFTS_FOLDER:-Drafts}
       - DATA_DIR=/data
     volumes:
       - ./config:/config:ro
       - ./data:/data
     networks:
-      - owui-tools
+      - ollama-tools
     logging:
       driver: json-file
       options:
         max-size: 5m
         max-file: 3
 
-networks:
-  owui-tools:
-    external: true
