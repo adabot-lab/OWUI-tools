@@ -1,17 +1,15 @@
 services:
-  my_little_rag-retrieval:
+  my_little_rag-retrieval-mcp:
     build: .
-#      context: /home/shadow01/ollama-tools/01_RAG/02_My_Little_RAG
-#      dockerfile: Dockerfile
-    container_name: my_little_rag-retrieval
+    image: my_little_rag-retrieval:latest
+    pull_policy: never
     restart: unless-stopped
-#    ports:
-#      - "8020:8000"  # Expose the service on port 8001
+    ports:
+      - "8020:8000"
     environment:
-      # Enable unbuffered output for Python
       - PYTHONUNBUFFERED=1
-      # Transport Type (set to 'mcp' or 'openapi')
-      - TRANSPORT_TYPE=${TRANSPORT_TYPE}
+      # mcp variant
+      - TRANSPORT_TYPE=mcp
       # Qdrant Configuration
       - QDRANT_HOST=${QDRANT_HOST}
       - QDRANT_PORT=${QDRANT_PORT}
@@ -35,3 +33,4 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     networks:
       - ollama-tools
+
