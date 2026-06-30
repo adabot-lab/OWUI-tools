@@ -32,3 +32,16 @@ himalaya-mcp/config/*
 himalaya-mcp/password
 himalaya-mcp/password.*
 himalaya-mcp/data/
+
+# --- Backup files (.bak, .bak1, .bak2, ...) ---
+*.bak
+*.bak*
+
+# --- Local override files (local.*) ---
+local.*
+
+# --- Project data / build dirs ---
+RAG/04_My_Little_RAG_qdrant/qdrant_storage/
+RAG/01_My_Little_RAG_Ingestion/input/
+openterminal/data/
+python-bash/workspace/
