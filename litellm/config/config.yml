@@ -52,7 +52,7 @@ model_list:
       model: zai/glm-4.7
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
-      drop_params: true 
+      drop_params: true
 
   - model_name: zai-glm-5
     litellm_params:
@@ -256,7 +256,13 @@ litellm_settings:
     allowed_fails_policy:           # Per-deployment: total failures across all requests before cooldown
       TimeoutErrorAllowedFails: 5   #   x timeout errors → deployment goes into cooldown
       RateLimitErrorAllowedFails: 5 #   x rate limit errors → deployment goes into cooldown
-  # Optional: Disable SSL verification for self-signed certificates
+
+## this is used to strip specific words from system prompts
+  # ^ format: <filename_without_.py>.<instance_variable_name>
+    callbacks: strip_hermes.strip_hermes_handler
+
+
+      # Optional: Disable SSL verification for self-signed certificates
   # ssl_verify: false
 
   # Optional: Enable caching
