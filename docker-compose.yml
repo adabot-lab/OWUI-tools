@@ -1,23 +1,23 @@
+# Local composition of all OWUI tools
+# This file is git-excluded (.git/info/exclude) — includes repo + local services
 include:
-
-# web search
-  - path: ./websearch/docker-compose.yml # :8011
-
-# RAG
-#  - path: ./01_RAG/01_My_Little_RAG_Ingestion/docker-compose.yml # this is run manually
-  - path: ./RAG/02_My_Little_RAG/docker-compose.yml # 8020
-  - path: ./RAG/03_My_Litte_RAG_Laws/docker-compose.yml # 8023
-  - path: ./RAG/04_My_Little_RAG_qdrant/docker-compose.yml  # 6777
-
-# openterminal
-  - path: ./openterminal/docker-compose.yml  # 8000
-
-# tika
-  - path: ./tika/docker-compose.yml # 9998
-
-# searngx
-  - path: ./searxng/docker-compose.yml  # 8040
-
-# bash shell with python
-#  - path: ./python-bash/docker-compose.yml  # 8000 ## deprecated for openterminal
-
+  # litellm
+  - path: ./litellm/docker-compose.yml
+  # web search
+  - path: ./websearch/docker-compose.yml
+  - path: ./websearch-mcp/docker-compose.yml
+  # RAG
+  - path: ./RAG/02_My_Little_RAG/docker-compose.yml
+  - path: ./RAG/02_My_Little_RAG/docker-compose.mcp.yml
+  - path: ./RAG/03_My_Litte_RAG_Laws/docker-compose.yml
+  - path: ./RAG/04_My_Little_RAG_qdrant/docker-compose.yml
+  # openterminal
+  - path: ./openterminal/docker-compose.yml
+  # tika
+  - path: ./tika/docker-compose.yml
+  # searxng
+  - path: ./searxng/docker-compose.yml
+#  # python-bash
+#  - path: ./python-bash/docker-compose.yml
+  # himalaya-mcp
+  - path: ./himalaya-mcp/docker-compose.yml
