@@ -215,7 +215,53 @@ def _clean_html(html: str, url: str) -> str:
     return text.strip()
 
 
-async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH) -> dict:
+def _extract_links(html: str, base_url: str, max_links: int = 200) -> list[dict]:
+    """Extract navigational anchor links from raw HTML.
+
+    Returns a list of {"text": ..., "href": ...} dicts with absolute URLs,
+    deduplicated by (href, text) and capped at max_links.
+    """
+    if not html or BeautifulSoup is None:
+        return []
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return []
+
+    seen = set()
+    links: list[dict] = []
+
+    for a in soup.find_all("a", href=True):
+        if len(links) >= max_links:
+            break
+
+        href = a["href"].strip()
+        if not href:
+            continue
+        # Skip non-navigational hrefs
+        lower = href.lower()
+        if lower.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+
+        # Resolve relative → absolute
+        absolute = urllib.parse.urljoin(base_url, href)
+        if not absolute:
+            continue
+
+        text = a.get_text(strip=True)
+
+        key = (absolute, text)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        links.append({"text": text, "href": absolute})
+
+    return links
+
+
+async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH, include_links: bool = False) -> dict:
     """Fetch a URL and return its cleaned text content."""
     if _is_pdf_url(url):
         content = await _extract_pdf_with_tika(url)
@@ -276,13 +322,18 @@ async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH) -> di
     if truncated:
         cleaned = cleaned[:max_length] + "... [content truncated]"
 
-    return {
+    result = {
         "url": url,
         "title": title,
         "content": cleaned,
         "content_length": len(cleaned),
         "truncated": truncated,
     }
+
+    if include_links:
+        result["links"] = _extract_links(html, url)
+
+    return result
 
 
 # ── MCP Server Definition ────────────────────────────────────────────────────
@@ -368,6 +419,7 @@ async def web_search(
 async def fetch_page(
     url: str,
     max_length: int = 50000,
+    include_links: bool = False,
 ) -> str:
     """Fetch a web page and extract its main text content, removing navigation,
     ads, and boilerplate. Use this to read the full content of a URL found via
@@ -376,6 +428,9 @@ async def fetch_page(
     Args:
         url: Full URL to fetch (must start with http:// or https://).
         max_length: Maximum characters to extract (default: 50000, max: 100000).
+        include_links: If true, extract anchor links from the page HTML and return
+            them as a separate "links" array of {text, href} objects with absolute URLs.
+            Default: false (backward compatible — no links field in output).
     """
     import json
 
@@ -385,7 +440,7 @@ async def fetch_page(
     max_length = max(1, min(100000, max_length))
 
     try:
-        result = await _fetch_page(url, max_length)
+        result = await _fetch_page(url, max_length, include_links=include_links)
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
