@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Optional, List, Dict, Any
 
 from legal_parser import LegalParagraph, load_legal_paragraphs
@@ -12,7 +13,6 @@ class LegalRetrievalEngine:
     """Class that encapsulates legal paragraph retrieval functionality"""
 
     def __init__(self):
-        self.legal_parser = None
         self._load_legal_paragraphs()
 
     def _load_legal_paragraphs(self):
@@ -39,9 +39,9 @@ class LegalRetrievalEngine:
             # First, try exact matching using our parser
             for paragraph in self.legal_paragraphs:
                 # Compare law names and abbreviations (case-insensitive, normalize spaces)
-                paragraph_law = paragraph.law_name.lower().replace('  ', ' ').strip()
-                paragraph_abbreviation = paragraph.law_abbreviation.lower().replace('  ', ' ').strip()
-                search_law = law_name.lower().replace('  ', ' ').strip()
+                paragraph_law = re.sub(r'\s+', ' ', paragraph.law_name.lower()).strip()
+                paragraph_abbreviation = re.sub(r'\s+', ' ', paragraph.law_abbreviation.lower()).strip()
+                search_law = re.sub(r'\s+', ' ', law_name.lower()).strip()
 
                 # Compare section numbers (normalize)
                 paragraph_section = paragraph.section_number.replace('§', '').strip()

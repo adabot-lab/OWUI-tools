@@ -2,7 +2,6 @@ import re
 import os
 from typing import List, Dict, Optional
 from pathlib import Path
-import markdown
 from dataclasses import dataclass
 
 @dataclass
@@ -82,7 +81,7 @@ class LegalDocumentParser:
             for line in lines[:10]:
                 line = line.strip()
                 # Match markdown headings like "# Gesetz..." or "# Verordnung..."
-                match = re.match(r'^#\s+(.+?)(?:\s+#|$)', line)
+                match = re.match(r'^#\s+(.+)(?:\s+#|$)', line)
                 if match:
                     law_name = match.group(1).strip()
                     break
@@ -164,9 +163,9 @@ class LegalDocumentParser:
         """Find a specific paragraph by law name and section number."""
         for paragraph in self.parsed_paragraphs:
             # Compare law names (case-insensitive, normalize spaces)
-            paragraph_law = paragraph.law_name.lower().replace('  ', ' ').strip()
-            paragraph_abbreviation = paragraph.law_abbreviation.lower().replace('  ', ' ').strip()
-            search_law = law_name.lower().replace('  ', ' ').strip()
+            paragraph_law = re.sub(r'\s+', ' ', paragraph.law_name.lower()).strip()
+            paragraph_abbreviation = re.sub(r'\s+', ' ', paragraph.law_abbreviation.lower()).strip()
+            search_law = re.sub(r'\s+', ' ', law_name.lower()).strip()
 
             # Compare section numbers (normalize)
             paragraph_section = paragraph.section_number.replace('§', '').strip()
