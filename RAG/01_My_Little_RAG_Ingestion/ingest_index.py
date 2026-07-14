@@ -46,7 +46,7 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 # Chunking
 MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", 600))  # Maximum tokens per chunk
 MIN_CHUNK_SIZE = int(os.getenv("MIN_CHUNK_SIZE", 200))  # Minimum tokens per chunk
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))    # Overlap between chunks
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))    # Reserved: overlap between chunks (not yet implemented in chunking logic)
 
 # Setup logging
 class Logger:
@@ -157,7 +157,7 @@ def get_file_hash(file_path: str) -> str:
         logger.log(f"Error hashing file {file_path}: {e}", "ERROR")
         return ""
 
-def has_file_changed(file_path: str, stored_metadata: Dict[str, Any], collection_name: str) -> bool:
+def has_file_changed(file_path: str, stored_metadata: Dict[str, Any], collection_name: str, current_hash: Optional[str] = None) -> bool:
     """Check if file has changed, was processed with a different collection, or has incomplete embedding"""
     file_key = str(file_path)
     if file_key not in stored_metadata:
@@ -175,7 +175,8 @@ def has_file_changed(file_path: str, stored_metadata: Dict[str, Any], collection
 
     try:
         current_mtime = os.path.getmtime(file_path)
-        current_hash = get_file_hash(file_path)
+        if current_hash is None:
+            current_hash = get_file_hash(file_path)
         stored_mtime = collection_metadata.get('mtime', 0)
         stored_hash = collection_metadata.get('hash', '')
 
@@ -375,7 +376,7 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
 
             # Check if file changed or needs reprocessing for this collection
             # When FORCE_REINDEX is true, process all files regardless of changes
-            file_has_changed = has_file_changed(path, stored_metadata, collection_name)
+            file_has_changed = has_file_changed(path, stored_metadata, collection_name, current_hash=current_hash)
             should_process_file = force_reindex or file_has_changed
 
             # Update current metadata
@@ -517,8 +518,9 @@ def split_into_paragraphs(text: str) -> list[str]:
 
 
 def estimate_token_count(text: str) -> int:
-    # Very rough but good enough for chunk sizing
-    return len(text.split())
+    # Rough heuristic adjusted for German compound words
+    # (~1.5x tokens per whitespace-split segment)
+    return int(len(text.split()) * 1.5)
 
 
 def split_sentences_respecting_bounds(text: str) -> List[str]:
@@ -720,23 +722,13 @@ def get_embedding_function():
                 return OllamaEmbeddings(
                     model=EMBEDDING_MODEL_NAME,
                     base_url=OLLAMA_BASE_URL,
-                    # Ollama doesn't support chunk_size parameter
                 )
-            elif PROVIDER == "openai":
+            else:  # OpenAI and OpenAI-compatible providers
                 return OpenAIEmbeddings(
                     model=EMBEDDING_MODEL_NAME,
                     openai_api_key=OPENAI_API_KEY,
                     openai_api_base=OPENAI_BASE_URL,
-                    # Increased batch size for better performance with new server settings
-                    chunk_size=50,  # Process up to 50 texts at a time for better performance
-                )
-            else:  # Default to OpenAI-compatible
-                return OpenAIEmbeddings(
-                    model=EMBEDDING_MODEL_NAME,
-                    openai_api_key=OPENAI_API_KEY,
-                    openai_api_base=OPENAI_BASE_URL,
-                    # Increased batch size for better performance with new server settings
-                    chunk_size=50,  # Process up to 50 texts at a time for better performance
+                    chunk_size=50,
                 )
         except Exception as e:
             if attempt == max_retries - 1:
@@ -780,7 +772,7 @@ def save_chunks_to_disk(chunks: List[Dict[str, Any]], path: str = CHUNKS_DIR, co
             if os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
-                except:
+                except Exception:
                     pass
 
     logger.log(f"Saved {saved_count} chunks to {collection_chunks_dir} (errors: {errors})", "INFO")
@@ -883,6 +875,81 @@ def load_cached_chunks(path: str = CHUNKS_DIR):
         except Exception as e:
             logger.log(f"Could not read chunk file {file}: {e}", "WARNING")
 
+
+def _create_collection_with_indexes(client: QdrantClient, collection_name: str):
+    """Create a Qdrant collection with vector config and payload indexes.
+
+    Consolidates the collection creation + index setup that was previously
+    triplicated across vector-mismatch-recreate, new-collection, and
+    force-reindex code paths.
+    """
+    client.create_collection(
+        collection_name=collection_name,
+        vectors_config={
+            "dense": VectorParams(
+                size=VECTOR_SIZE,
+                distance=Distance.COSINE,
+                hnsw_config={
+                    "m": 16,
+                    "ef_construct": 100,
+                    "full_scan_threshold": 10000,
+                },
+                quantization_config=None,
+            ),
+        },
+        sparse_vectors_config={
+            "sparse": SparseVectorParams(
+                modifier=models.Modifier.IDF,
+            )
+        },
+        hnsw_config={
+            "m": 16,
+            "ef_construct": 100,
+            "full_scan_threshold": 10000,
+        },
+        optimizers_config={
+            "memmap_threshold": 20000,
+            "indexing_threshold": 20000,
+        }
+    )
+
+    # Create text index for BM25 search
+    logger.log("Creating text index for sparse search...")
+    try:
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name="text",
+            field_schema=TextIndexParams(
+                type="text",
+                tokenizer="word",
+                min_token_len=2,
+                max_token_len=20,
+                lowercase=True,
+            )
+        )
+        logger.log("Text index created successfully")
+    except Exception as e:
+        logger.log(f"Warning: Failed to create text index: {e}", "WARNING")
+        logger.log("Text search may not work properly", "WARNING")
+
+    # Create payload indexes for better filtering performance
+    logger.log("Creating payload indexes for doc_id and source...")
+    try:
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name="doc_id",
+            field_schema="integer"
+        )
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name="source",
+            field_schema="keyword"
+        )
+        logger.log("Payload indexes created successfully")
+    except Exception as e:
+        logger.log(f"Warning: Failed to create payload indexes: {e}", "WARNING")
+
+
 def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_collection: Dict[str, List[int]], embeddings):
     """Update Qdrant index incrementally for multiple collections.
     
@@ -925,110 +992,12 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
             dense_config = collection_info.config.params.vectors.get("dense")
             if not dense_config or dense_config.size != VECTOR_SIZE:
                 logger.log(f"Vector configuration mismatch, recreating collection {collection_name}", "WARNING")
-                client.recreate_collection(
-                    collection_name=collection_name,
-                    vectors_config={
-                        "dense": VectorParams(
-                            size=VECTOR_SIZE,
-                            distance=Distance.COSINE,
-                            hnsw_config={
-                                "m": 16,
-                                "ef_construct": 100,
-                                "full_scan_threshold": 10000,
-                            },
-                        ),
-                    },
-                    sparse_vectors_config={
-                        "sparse": SparseVectorParams(
-                            modifier=models.Modifier.IDF,
-                        )
-                    },
-                    hnsw_config={
-                        "m": 16,
-                        "ef_construct": 100,
-                        "full_scan_threshold": 10000,
-                    },
-                    optimizers_config={
-                        "memmap_threshold": 20000,
-                        "indexing_threshold": 20000,
-                    }
-                )
+                client.delete_collection(collection_name=collection_name)
+                _create_collection_with_indexes(client, collection_name)
         else:
             logger.log(f"Creating new Qdrant collection: {collection_name}")
             try:
-                client.create_collection(
-                    collection_name=collection_name,
-                    vectors_config={
-                        "dense": VectorParams(
-                            size=VECTOR_SIZE,
-                            distance=Distance.COSINE,
-                            # Use hnsw config for better search performance
-                            hnsw_config={
-                                "m": 16,  # Number of edges per vertex (default 16, good for most cases)
-                                "ef_construct": 100,  # Construction time parameter (default 100)
-                                "full_scan_threshold": 10000,  # Use HNSW when collection size exceeds this (default 10000)
-                            },
-                            # Use quantization to reduce memory usage (optional)
-                            quantization_config=None,  # Can set scalar quantization if needed
-                        ),
-                    },
-                    sparse_vectors_config={
-                        "sparse": SparseVectorParams(
-                            modifier=models.Modifier.IDF,
-                        )
-                    },
-                    # Optimize for better performance
-                    hnsw_config={
-                        "m": 16,
-                        "ef_construct": 100,
-                        "full_scan_threshold": 10000,
-                    },
-                    # Enable payload indexing for faster filtering
-                    optimizers_config={
-                        "memmap_threshold": 20000,      # Store index on disk if more than this many vectors
-                        "indexing_threshold": 20000,    # Index vectors on disk after this many
-                    }
-                )
-
-                # Create text index for BM25 search
-                logger.log("Creating text index for sparse search...")
-                try:
-                    client.create_payload_index(
-                        collection_name=collection_name,
-                        field_name="text",
-                        field_schema=TextIndexParams(
-                            type="text",
-                            tokenizer="word",
-                            min_token_len=2,
-                            max_token_len=20,
-                            lowercase=True,
-                        )
-                    )
-                    logger.log("Text index created successfully")
-                except Exception as e:
-                    logger.log(f"Warning: Failed to create text index: {e}", "WARNING")
-                    logger.log("Text search may not work properly", "WARNING")
-
-                # Create payload indexes for better filtering performance
-                logger.log("Creating payload indexes for doc_id and source...")
-                try:
-                    # Integer index for doc_id (faster filtering by document ID)
-                    client.create_payload_index(
-                        collection_name=collection_name,
-                        field_name="doc_id",
-                        field_schema="integer"
-                    )
-
-                    # Keyword index for source (faster filtering by document source)
-                    client.create_payload_index(
-                        collection_name=collection_name,
-                        field_name="source",
-                        field_schema="keyword"
-                    )
-
-                    logger.log("Payload indexes created successfully")
-                except Exception as e:
-                    logger.log(f"Warning: Failed to create payload indexes: {e}", "WARNING")
+                _create_collection_with_indexes(client, collection_name)
             except Exception as e:
                 # Handle the case where the collection was created by another process
                 if "already exists" in str(e):
@@ -1052,79 +1021,7 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
 
                 # Recreate the collection with the same configuration
                 logger.log(f"Recreating collection {collection_name}...")
-                client.create_collection(
-                    collection_name=collection_name,
-                    vectors_config={
-                        "dense": VectorParams(
-                            size=VECTOR_SIZE,
-                            distance=Distance.COSINE,
-                            # Use hnsw config for better search performance
-                            hnsw_config={
-                                "m": 16,  # Number of edges per vertex (default 16, good for most cases)
-                                "ef_construct": 100,  # Construction time parameter (default 100)
-                                "full_scan_threshold": 10000,  # Use HNSW when collection size exceeds this (default 10000)
-                            },
-                            # Use quantization to reduce memory usage (optional)
-                            quantization_config=None,  # Can set scalar quantization if needed
-                        ),
-                    },
-                    sparse_vectors_config={
-                        "sparse": SparseVectorParams(
-                            modifier=models.Modifier.IDF,
-                        )
-                    },
-                    # Optimize for better performance
-                    hnsw_config={
-                        "m": 16,
-                        "ef_construct": 100,
-                        "full_scan_threshold": 10000,
-                    },
-                    # Enable payload indexing for faster filtering
-                    optimizers_config={
-                        "memmap_threshold": 20000,      # Store index on disk if more than this many vectors
-                        "indexing_threshold": 20000,    # Index vectors on disk after this many
-                    }
-                )
-
-                # Create text index for BM25 search
-                logger.log("Creating text index for sparse search...")
-                try:
-                    client.create_payload_index(
-                        collection_name=collection_name,
-                        field_name="text",
-                        field_schema=TextIndexParams(
-                            type="text",
-                            tokenizer="word",
-                            min_token_len=2,
-                            max_token_len=20,
-                            lowercase=True,
-                        )
-                    )
-                    logger.log("Text index created successfully")
-                except Exception as e:
-                    logger.log(f"Warning: Failed to create text index: {e}", "WARNING")
-                    logger.log("Text search may not work properly", "WARNING")
-
-                # Create payload indexes for better filtering performance
-                logger.log("Creating payload indexes for doc_id and source...")
-                try:
-                    # Integer index for doc_id (faster filtering by document ID)
-                    client.create_payload_index(
-                        collection_name=collection_name,
-                        field_name="doc_id",
-                        field_schema="integer"
-                    )
-
-                    # Keyword index for source (faster filtering by document source)
-                    client.create_payload_index(
-                        collection_name=collection_name,
-                        field_name="source",
-                        field_schema="keyword"
-                    )
-
-                    logger.log("Payload indexes created successfully")
-                except Exception as e:
-                    logger.log(f"Warning: Failed to create payload indexes: {e}", "WARNING")
+                _create_collection_with_indexes(client, collection_name)
 
                 logger.log(f"Collection {collection_name} recreated successfully for reindexing")
             except Exception as e:
@@ -1280,7 +1177,7 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
                     except Exception as e:
                         retry_count += 1
                         if retry_count < max_retries:
-                            wait_time = retry_count * 5  # Exponential backoff
+                            wait_time = min(5 * (2 ** retry_count), 60)  # Exponential backoff (capped at 60s)
                             logger.log(f"Error processing batch {batch_number}/{total_batches} in collection {collection_name} (attempt {retry_count}): {e}. Retrying in {wait_time}s...", "WARNING")
                             time.sleep(wait_time)
                         else:
