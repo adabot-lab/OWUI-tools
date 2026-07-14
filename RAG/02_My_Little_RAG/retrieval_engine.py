@@ -26,8 +26,8 @@ VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", 1024))  # Embedding dimension
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-#OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://llamacpp.legally-berlin.de/v1")
-OPENAI_BASE_URL = os.getenv("OPENAI_RETRIVAL_URL")
+OPENAI_BASE_URL = os.getenv("OPENAI_RETRIEVAL_URL") or os.getenv("OPENAI_BASE_URL")
+# Note: OPENAI_RETRIEVAL_URL takes priority; falls back to OPENAI_BASE_URL
 
 # Ollama
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
@@ -144,7 +144,7 @@ class RetrievalEngine:
         query: str,
         top_k: int = 10,
         min_score: float = 0.0,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> List[dict]:
         """
         General hybrid search across all documents in the Qdrant collection.
@@ -204,6 +204,9 @@ class RetrievalEngine:
                 for idx, point in enumerate(search_result)
             ]
 
+            if min_score > 0:
+                results = [r for r in results if r["score"] >= min_score]
+
             return results
 
         except Exception as e:
@@ -216,7 +219,7 @@ class RetrievalEngine:
         file_name: str,
         top_k: int = 10,
         min_score: float = 0.0,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> List[dict]:
         """
         Hybrid search within a specific file in the Qdrant collection.
@@ -272,6 +275,7 @@ class RetrievalEngine:
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     query=dense_vector,
+                    query_filter=file_filter,
                     limit=top_k,
                     with_payload=True
                 ).points
@@ -287,6 +291,9 @@ class RetrievalEngine:
                 for idx, point in enumerate(search_result)
             ]
 
+            if min_score > 0:
+                results = [r for r in results if r["score"] >= min_score]
+
             return results
 
         except Exception as e:
@@ -298,7 +305,7 @@ class RetrievalEngine:
         query: str,
         top_k: int = 10,
         min_score: float = 0.0,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> List[dict]:
         """
         Text-only search using native BM25 sparse vectors across all documents in the Qdrant collection.
@@ -334,6 +341,9 @@ class RetrievalEngine:
                 for idx, point in enumerate(search_result)
             ]
 
+            if min_score > 0:
+                results = [r for r in results if r["score"] >= min_score]
+
             return results
 
         except Exception as e:
@@ -346,7 +356,7 @@ class RetrievalEngine:
         file_name: str,
         top_k: int = 10,
         min_score: float = 0.0,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> List[dict]:
         """
         Text-only search using native BM25 sparse vectors within a specific file in the Qdrant collection.
@@ -392,6 +402,9 @@ class RetrievalEngine:
                 }
                 for idx, point in enumerate(search_result)
             ]
+
+            if min_score > 0:
+                results = [r for r in results if r["score"] >= min_score]
 
             return results
 
