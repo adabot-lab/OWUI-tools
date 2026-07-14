@@ -152,16 +152,20 @@ def get_enabled_engines() -> List[str]:
         engines.append("searxng")
     return engines
 
-async def extract_pdf_content_with_tika(pdf_url: str) -> str:
-    """Extract text content from a PDF using Apache Tika server"""
-    # Download the PDF content first, with redirects enabled
-    async with httpx.AsyncClient(timeout=PAGE_FETCH_TIMEOUT, follow_redirects=True) as download_client:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        response = await download_client.get(pdf_url, headers=headers)
-        response.raise_for_status()
-        pdf_content = response.content
+async def extract_pdf_content_with_tika(pdf_url: str, pdf_bytes: Optional[bytes] = None) -> str:
+    """Extract text content from a PDF using Apache Tika server.
+
+    If pdf_bytes is provided, uses them directly instead of re-downloading from pdf_url.
+    """
+    if pdf_bytes is None:
+        # Download the PDF content first, with redirects enabled
+        async with httpx.AsyncClient(timeout=PAGE_FETCH_TIMEOUT, follow_redirects=True) as download_client:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            }
+            response = await download_client.get(pdf_url, headers=headers)
+            response.raise_for_status()
+            pdf_bytes = response.content
 
     # Use a separate client for Tika requests to avoid any potential conflicts
     async with httpx.AsyncClient(timeout=PAGE_FETCH_TIMEOUT) as tika_client:
@@ -170,7 +174,7 @@ async def extract_pdf_content_with_tika(pdf_url: str) -> str:
             tika_response = await tika_client.put(
                 f"{TIKA_SERVER_URL}/tika",
                 headers={"Accept": "text/plain", "Content-Type": "application/pdf"},
-                content=pdf_content
+                content=pdf_bytes
             )
             tika_response.raise_for_status()
             return tika_response.text
@@ -185,7 +189,7 @@ async def extract_pdf_content_with_tika(pdf_url: str) -> str:
 
 def is_pdf_url(url: str) -> bool:
     """Check if the URL points to a PDF file"""
-    return url.lower().endswith('.pdf') or 'pdf' in url.lower()
+    return url.lower().endswith('.pdf') or '.pdf?' in url.lower()
 
 
 def is_pdf_content_type(content_type: str) -> bool:
@@ -252,12 +256,8 @@ async def fetch_html_content(url: str) -> str:
                     # Check the content type from the response
                     content_type = response.headers.get("content-type", "")
                     if is_pdf_content_type(content_type):
-                        # If we got a PDF, process with Tika using the response content
-                        # Use the same robust Tika extraction method as the dedicated function
-                        pdf_content = response.content
-
-                        # Use the dedicated function for Tika extraction
-                        return await extract_pdf_content_with_tika(url)
+                        # PDF detected via content-type — pass in-memory bytes to avoid re-download
+                        return await extract_pdf_content_with_tika(url, pdf_bytes=response.content)
                     else:
                         # It's HTML content, return as text
                         return response.text
@@ -333,22 +333,23 @@ async def process_single_url(url: str) -> str:
     return cleaned_text
 
 async def process_multiple_urls(urls: List[str]) -> List[Dict[str, Any]]:
-    """Process multiple URLs and return their content"""
+    """Process multiple URLs concurrently and return their content"""
+    async def _process_one(url: str) -> Dict[str, Any]:
+        html = await fetch_html_content(url)
+        cleaned_text = clean_html_content(html, url)
+        return {"url": url, "text": cleaned_text}
+
+    results_raw = await asyncio.gather(
+        *[_process_one(url) for url in urls], return_exceptions=True
+    )
+
     results = []
-    
-    for url in urls:
-        try:
-            html = await fetch_html_content(url)
-            cleaned_text = clean_html_content(html, url)
-            
-            results.append({
-                "url": url,
-                "text": cleaned_text
-            })
-        except Exception as e:
-            print(f"Error processing URL {url}: {e}")
+    for i, res in enumerate(results_raw):
+        if isinstance(res, Exception):
+            print(f"Error processing URL {urls[i]}: {res}")
             continue
-    
+        results.append(res)
+
     return results
 
 async def search_google(query: str, num_results: int) -> List[SearchResult]:

@@ -265,16 +265,18 @@ async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH, inclu
     """Fetch a URL and return its cleaned text content."""
     if _is_pdf_url(url):
         content = await _extract_pdf_with_tika(url)
+        truncated_content = content[:max_length]
         return {
             "url": url,
             "title": os.path.basename(urllib.parse.urlparse(url).path) or url,
-            "content": content[:max_length],
-            "content_length": len(content[:max_length]),
+            "content": truncated_content,
+            "content_length": len(truncated_content),
             "truncated": len(content) > max_length,
         }
 
     html = None
     last_error = None
+    fatal_error = False
 
     for headers in _HEADERS:
         for timeout_extra in (0, 5, 10):
@@ -293,10 +295,11 @@ async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH, inclu
                 if e.response.status_code in (403, 429, 401):
                     continue
                 last_error = f"HTTP {e.response.status_code}"
+                fatal_error = True
                 break
             except httpx.RequestError:
                 continue
-        if html:
+        if html or fatal_error:
             break
 
     if html is None:
