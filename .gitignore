@@ -43,5 +43,12 @@ local.*
 # --- Project data / build dirs ---
 RAG/04_My_Little_RAG_qdrant/qdrant_storage/
 RAG/01_My_Little_RAG_Ingestion/input/
+RAG/01_My_Little_RAG_Ingestion/chunks/
+RAG/01_My_Little_RAG_Ingestion/metadata/
 openterminal/data/
 python-bash/workspace/
+
+# --- Python bytecode / cache ---
+__pycache__/
+*.py[cod]
+*.pyo
