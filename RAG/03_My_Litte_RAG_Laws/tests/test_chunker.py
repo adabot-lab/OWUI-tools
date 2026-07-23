@@ -36,14 +36,14 @@ def test_chunk_markdown_small_file():
 
 def test_chunk_markdown_splits_on_paragraph_boundary():
     """Large files should split at paragraph boundaries."""
-    section = "§ {} " + "Das ist ein sehr langer Absatz mit viel Text. " * 20
+    padding = "Das ist ein sehr langer Absatz mit viel Text. " * 10
     md = "# Gesetz: Test\n# Abkürzung: T\n\n"
     for i in range(1, 21):
-        md += section.format(i) + "\n\n"
+        md += f"§ {i} {padding}\n\n"
 
     chunks = chunk_markdown(md, max_chunk_chars=2000)
     assert len(chunks) > 1
-    # Each chunk should start with a § or header
+    # Each chunk should contain a § or header (sections split at boundaries)
     for chunk in chunks:
         assert "§" in chunk or "# Gesetz" in chunk
 
