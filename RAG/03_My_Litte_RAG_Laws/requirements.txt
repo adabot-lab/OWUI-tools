@@ -1,18 +1,11 @@
-# Core dependencies for retrieval API
+# Core dependencies for MCP server
 mcp>=1.0.0
 
-# Web framework
-fastapi>=0.100.0
+# ASGI server (runs the MCP streamable HTTP app)
 uvicorn>=0.20.0
-
-# Data validation
-pydantic>=2.0.0
 
 # Environment handling
 python-dotenv>=1.0.0
 
-# HTTP client support
+# HTTP client support (used by extractor)
 httpx>=0.24.0
-
-# Markdown processing
-markdown>=3.4.0
