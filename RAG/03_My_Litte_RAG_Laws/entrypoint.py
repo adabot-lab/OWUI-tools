@@ -2,7 +2,9 @@
 """Docker entrypoint: orchestrates data loading mode then starts MCP server.
 
 Modes (via FETCH_MODE env var):
-    serve  (default) — start MCP server with existing DB, no data loading
+    serve  (default) — if DB exists, just serve;
+                       if no DB + cache available, populate from cache then serve;
+                       if no DB + no cache, warn and serve empty
     fetch            — refresh: if DB exists, nuke all + re-download;
                        if no DB, use cache if available, else download fresh
     local            — nuke DB, parse from data/cache/, populate, then serve
@@ -45,8 +47,22 @@ def main():
     mode = FETCH_MODE.lower().strip()
 
     if mode == "serve":
-        print("[entrypoint] Mode: serve — starting with existing DB")
-        # Nothing to do, just fall through to MCP server
+        db_exists = Path(DB_PATH).exists()
+
+        if db_exists:
+            print("[entrypoint] Mode: serve — DB exists, starting server")
+            # DB already populated, just fall through to MCP server
+
+        elif _cache_has_files():
+            # No DB but cache has files: populate from cache, then serve
+            print("[entrypoint] Mode: serve — no DB, populating from cache, then serving")
+            from fetch.run_fetch import run_pipeline
+            run_pipeline(from_cache=True, dry_run=False)
+
+        else:
+            # No DB and no cache: start empty server (don't crash)
+            print("[entrypoint] Mode: serve — no DB, no cache")
+            print("[entrypoint] WARNING: No data available — server will start with an empty database")
 
     elif mode == "fetch":
         from fetch.run_fetch import run_pipeline
