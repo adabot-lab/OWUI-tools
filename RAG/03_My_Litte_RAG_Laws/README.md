@@ -1,153 +1,113 @@
 # Legal Paragraph Retrieval Service
 
-MCP server for German procurement law (Vergaberecht): VgV, GWB, VOB, and EU Directive 2014/24/EU.
+MCP server for retrieving German and EU legal texts via full-text search and
+exact paragraph lookup. Law texts are fetched deterministically from official
+sources — no LLM, no manual data entry.
 
-## What is this?
-
-A pipeline that converts raw law PDFs (converted to markdown) into a searchable SQLite database, exposed via MCP (Model Context Protocol) streamable HTTP.
-
-**Architecture:**
+## Architecture
 
 ```
-PDF → pymupdf4llm → raw .md → LLM extractor → structured JSON → SQLite (FTS5) → MCP tools
+input/sources.txt (URLs)
+       │
+       ▼
+fetch/fetcher.py ── download + classify by domain
+       │
+       ├── gesetze-im-internet.de/*.zip      → fetch/parsers/gii_xml.py
+       ├── verwaltungsvorschriften-.../*.htm  → fetch/parsers/vv_html.py
+       └── eur-lex.europa.eu/...CELEX:...     → fetch/parsers/eurlex_html.py
+                                                   (rewritten to CELLAR API)
+       │
+       ▼
+SQLite + FTS5 (data/legal.db)
+       │
+       ▼
+legal_engine.py → main.py (MCP server, 3 tools)
 ```
 
-The LLM handles footnote removal, paragraph boundary detection, and formatting cleanup — replacing fragile bash scripts and regex parsers.
+## Source Types
 
-**Three MCP tools:**
+The fetcher auto-detects the source type from the URL domain:
 
-| Tool | Description |
-|------|-------------|
-| `retrieve_paragraph(law_name, section_number)` | Get exact text of a specific paragraph by law + section number |
-| `search_paragraphs(query)` | Full-text search across all paragraphs (FTS5) |
-| `list_laws()` | List all laws in the collection with section counts |
+| Source | URL Pattern | Format |
+|--------|-------------|--------|
+| **GII** (gesetze-im-internet.de) | `.../<slug>/xml.zip` | ZIP with GII norm DTD XML |
+| **VV** (verwaltungsvorschriften-im-internet.de) | `.../<doc>.htm` | Semi-structured HTML |
+| **EUR-Lex** (eur-lex.europa.eu) | `...?uri=CELEX:<number>` | ELI-annotated XHTML (via CELLAR API) |
 
-**Laws included:**
-- **VgV** — Verordnung über die Vergabe öffentlicher Aufträge
-- **GWB** — Gesetz gegen Wettbewerbsbeschränkungen
-- **VOB** — Vergabe- und Vertragsordnung für Bauleistungen
-- **EU-2014/24/EU** — Richtlinie 2014/24/EU
+EUR-Lex URLs are automatically rewritten to the CELLAR API at
+`publications.europa.eu/resource/celex/{CELEX}` to bypass the AWS WAF block
+on the EUR-Lex frontend.
 
-## How to Run
+## Adding Laws
 
-### 1. Prerequisites
-
-- Docker + Docker Compose
-- A LiteLLM proxy (or any OpenAI-compatible endpoint) for the extraction step
-- Raw `.md` files in `input/` (generated from PDFs via `pymupdf4llm`)
-
-### 2. Configure environment
+Edit `input/sources.txt` — one URL per line. Comments (`#`) and empty lines
+are ignored. See the file header for URL format examples.
 
 ```bash
-cp .env.example .env
-# Edit .env with your settings
+# Re-fetch all sources
+python -m fetch.run_fetch
+
+# Dry run (fetch + validate, no DB write)
+python -m fetch.run_fetch --dry-run
 ```
 
-Key variables:
+## Configuration
+
+All config via environment variables (`.env` file or docker-compose):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MCP_HOST` | `0.0.0.0` | Server bind address |
-| `MCP_PORT` | `8000` | Server port |
-| `MCP_ALLOWED_HOSTS` | _(empty)_ | Comma-separated host:port allowlist for DNS-rebinding protection. Empty = protection disabled (trusted networks) |
-| `LEGAL_DOCUMENTS_DIR` | `input` | Directory containing raw law `.md` files |
+| `LEGAL_SOURCES_FILE` | `input/sources.txt` | Source URLs file |
 | `LEGAL_DB_PATH` | `data/legal.db` | SQLite database path |
-| `LLM_BASE_URL` | `http://localhost:4000/v1` | LLM endpoint for extraction pipeline (not needed at runtime) |
-| `LLM_EXTRACT_MODEL` | `zai-glm-4.7` | Model name for extraction |
+| `MCP_HOST` | `0.0.0.0` | MCP server bind host |
+| `MCP_PORT` | `8000` | MCP server port |
+| `MCP_ALLOWED_HOSTS` | (empty) | Comma-separated allowed Host headers |
 
-### 3. Populate the database (extraction pipeline)
+## MCP Tools
 
-The extraction pipeline sends raw markdown to an LLM, gets structured paragraphs back, validates, and stores in SQLite.
+| Tool | Description |
+|------|-------------|
+| `retrieve_paragraph(law_name, section_number)` | Exact paragraph lookup by law + §/Artikel number |
+| `search_paragraphs(query, limit=20)` | Full-text search with ranked snippets |
+| `list_laws()` | List all laws with section counts |
 
-```bash
-# Set LLM credentials
-export LLM_BASE_URL=http://your-litellm-proxy:4000/v1
-export LLM_API_KEY=sk-your-key
-
-# Run extraction on all .md files in input/
-docker compose run --rm legal-paragraph-api python -m extract.run_extraction
-
-# Or extract a specific file
-docker compose run --rm legal-paragraph-api python -m extract.run_extraction input/VgV.md
-
-# Or dry-run (extract without writing to DB)
-docker compose run --rm legal-paragraph-api python -m extract.run_extraction --dry-run
-
-# With expected section counts for validation
-docker compose run --rm legal-paragraph-api python -m extract.run_extraction --expected VgV:63
-```
-
-### 4. Start the MCP server
+## Docker
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-The MCP streamable HTTP endpoint is at `http://<host>:8000/mcp`.
-
-### 5. Connect from an MCP client
-
-Add to your MCP client config (e.g., Hermes, Claude Desktop):
-
-```json
-{
-  "mcpServers": {
-    "legal-paragraphs": {
-      "url": "http://<host>:8000/mcp"
-    }
-  }
-}
-```
+The server listens on port 8000 at `/mcp`.
 
 ## Development
 
-### Local setup (without Docker)
-
 ```bash
-cd 03_My_Litte_RAG_Laws
-python3 -m venv .venv
-source .venv/bin/activate
+# Create venv
+python -m venv .venv && source .venv/bin/activate
+
+# Install deps
 pip install -r requirements.txt
-pip install pytest  # for tests
+
+# Run tests
+python -m pytest tests/ -v
+
+# Run fetch pipeline
+python -m fetch.run_fetch
+
+# Start MCP server
+python main.py
 ```
 
-### Run tests
+## Testing
+
+Test fixtures are trimmed versions of real source documents in
+`tests/testdata/`:
+
+- `vgv_sample.xml` — GII XML (VgV, 3 paragraphs)
+- `vob_sample.htm` — VV HTML (VOB/A, 5 paragraphs across 3 Abschnitte)
+- `eurlex_sample.xhtml` — EUR-Lex XHTML (RL 2014/24/EU, 3 articles)
 
 ```bash
-.venv/bin/python -m pytest tests/ -v
-```
-
-### Project structure
-
-```
-03_My_Litte_RAG_Laws/
-├── main.py                  # MCP streamable HTTP entrypoint
-├── db.py                    # SQLite database layer with FTS5
-├── legal_engine.py          # Query layer (retrieve, search, list)
-├── extract/
-│   ├── chunker.py           # Splits raw markdown into LLM-sized chunks
-│   ├── extractor.py         # LLM-based paragraph extraction
-│   ├── validator.py         # Validates extraction results
-│   └── run_extraction.py    # End-to-end CLI pipeline
-├── input/                   # Raw .md files (from Convert_to_MD)
-├── data/                    # Generated SQLite DB (gitignored)
-├── tests/                   # 33 tests across all modules
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-└── .env.example
-```
-
-## Adding a new law
-
-```bash
-# 1. Convert PDF to markdown (pymupdf4llm)
-# 2. Add header to the .md file:
-#    # Gesetz: Full Law Name
-#    # Abkürzung: ABBR
-#    # Stand: DD.MM.YYYY
-# 3. Place in input/
-# 4. Run extraction
-python -m extract.run_extraction input/new_law.md
-# 5. Restart the server — law is immediately available
+python -m pytest tests/ -v          # full suite
+python -m pytest tests/test_gii_xml.py -v  # single parser
 ```
