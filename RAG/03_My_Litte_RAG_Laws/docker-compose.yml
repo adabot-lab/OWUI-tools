@@ -12,15 +12,14 @@ services:
       #   serve — start with existing DB (default)
       #   fetch — nuke DB + cache, download fresh, populate, then serve
       #   local — nuke DB, parse from data/cache/, populate, then serve
-      - FETCH_MODE=serve
-      - LEGAL_SOURCES_FILE=input/sources.txt
-      - LEGAL_DB_PATH=data/legal.db
+      - FETCH_MODE=${FETCH_MODE}
+      - LEGAL_SOURCES_FILE=${LEGAL_SOURCES_FILE}
+      - LEGAL_DB_PATH=${LEGAL_DB_PATH}
     env_file:
       - .env
     restart: unless-stopped
     networks:
-      - owui-tools
+      - ollama-tools
 
-networks:
-  owui-tools:
-    external: true
+#networks:
+#  ollama-tools:
