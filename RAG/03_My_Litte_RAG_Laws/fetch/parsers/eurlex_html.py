@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Tag
 
 from .base import BaseParser, LawDocument, Paragraph
 
@@ -18,8 +18,13 @@ from .base import BaseParser, LawDocument, Paragraph
 _CELEX_RE = re.compile(r"0(\d{4})L(\d+)")
 # Reference line format: "... — DE — DD.MM.YYYY" (any language code).
 _DATE_RE = re.compile(r"—\s*[A-Z]{2}\s*—\s*(\d{2}\.\d{2}\.\d{4})")
-# "Artikel 1" / "Artikel 94" / "Article 1".
+# Fallback: extract directive number from the law name, e.g. "2014/24/EU".
+_DIRECTIVE_RE = re.compile(r"(\d{4})/(\d+)/EU")
+# Extract the trailing integer from "Artikel 1" / "Article 94".
 _ARTICLE_NUM_RE = re.compile(r"\d+")
+
+# CSS selectors for elements that should be stripped before text extraction.
+_STRIP_SELECTORS = ("p.modref", "a.modref", ".footnote", ".note")
 
 
 class EurlexHtmlParser(BaseParser):
@@ -35,7 +40,7 @@ class EurlexHtmlParser(BaseParser):
         paragraphs: list[Paragraph] = []
         seen_numbers: set[str] = set()
         for art_div in soup.select("div.eli-subdivision"):
-            art_id = art_div.get("id", "")
+            art_id = str(art_div.get("id") or "")
             # Skip chapter/section containers (ids starting with "enc_").
             if not art_id.startswith("art_"):
                 continue
@@ -61,13 +66,15 @@ class EurlexHtmlParser(BaseParser):
     @staticmethod
     def _extract_law_name(soup: BeautifulSoup) -> str:
         node = soup.select_one("p.title-doc-first")
-        if node is None:
-            return ""
-        return node.get_text(strip=True)
+        return node.get_text(strip=True) if node is not None else ""
 
     @staticmethod
     def _extract_reference(soup: BeautifulSoup) -> tuple[str, str]:
-        """Return ``(abbreviation, stand_date)`` parsed from the CELEX reference."""
+        """Return ``(abbreviation, stand_date)`` from the CELEX reference line.
+
+        Falls back to extracting the abbreviation from the law name when the
+        ``<p class="reference">`` element is absent (e.g. in trimmed fixtures).
+        """
         abbreviation = ""
         stand_date = ""
 
@@ -84,6 +91,14 @@ class EurlexHtmlParser(BaseParser):
             if date_match:
                 stand_date = date_match.group(1).replace(".", "-")
 
+        if not abbreviation:
+            name_node = soup.select_one("p.title-doc-first")
+            if name_node is not None:
+                name_text = name_node.get_text(" ", strip=True)
+                name_match = _DIRECTIVE_RE.search(name_text)
+                if name_match:
+                    abbreviation = f"{name_match.group(1)}/{name_match.group(2)}/EU"
+
         return abbreviation, stand_date
 
     # ------------------------------------------------------------------
@@ -92,8 +107,14 @@ class EurlexHtmlParser(BaseParser):
     def _parse_article(self, art_div: Tag) -> Paragraph | None:
         section_number = self._extract_article_number(art_div)
         title = self._extract_article_title(art_div)
-        content = self._extract_article_content(art_div)
 
+        # Strip modification references and footnotes in-place; each art_div
+        # is processed exactly once so mutation is safe.
+        for selector in _STRIP_SELECTORS:
+            for el in art_div.select(selector):
+                el.decompose()
+
+        content = self._extract_article_content(art_div)
         if not content.strip():
             return None
 
@@ -107,77 +128,66 @@ class EurlexHtmlParser(BaseParser):
     @staticmethod
     def _extract_article_number(art_div: Tag) -> str:
         node = art_div.select_one("p.title-article-norm")
-        if node is None:
-            # Fall back to the id ("art_1" → "1").
-            art_id = art_div.get("id", "")
-            m = _ARTICLE_NUM_RE.search(art_id)
-            return m.group(0) if m else ""
-        text = node.get_text(strip=True)
-        m = _ARTICLE_NUM_RE.search(text)
+        if node is not None:
+            m = _ARTICLE_NUM_RE.search(node.get_text(strip=True))
+            if m:
+                return m.group(0)
+        # Fallback: extract from the id ("art_1" → "1").
+        m = _ARTICLE_NUM_RE.search(str(art_div.get("id") or ""))
         return m.group(0) if m else ""
 
     @staticmethod
     def _extract_article_title(art_div: Tag) -> str:
         node = art_div.select_one("p.stitle-article-norm")
-        if node is None:
-            return ""
-        return node.get_text(strip=True)
+        return node.get_text(strip=True) if node is not None else ""
 
     @staticmethod
     def _extract_article_content(art_div: Tag) -> str:
-        """Build cleaned article text: "Artikel N" + title + body.
+        """Build cleaned article text: heading + subtitle + body paragraphs.
 
-        Modification markers (``<p class="modref">`` / ``<a class="modref">``)
-        and footnote elements are stripped before text extraction.
+        Body text is collected from the *outermost* ``<div|p class="norm">``
+        elements — i.e. those not nested inside another ``norm`` element — so
+        that wrapper/child overlap does not duplicate text.
         """
-        art_div = art_div.__copy__()
-
-        # Remove modification references and footnote markers wholesale.
-        for selector in ("p.modref", "a.modref", ".footnote", ".note"):
-            for el in art_div.select(selector):
-                el.decompose()
-
         parts: list[str] = []
-        title_node = art_div.select_one("p.title-article-norm")
-        if title_node is not None:
-            parts.append(title_node.get_text(strip=True))
 
-        subtitle_node = art_div.select_one("p.stitle-article-norm")
-        if subtitle_node is not None:
-            parts.append(subtitle_node.get_text(strip=True))
+        heading = art_div.select_one("p.title-article-norm")
+        if heading is not None:
+            parts.append(heading.get_text(strip=True))
 
-        # Body: walk every <div class="norm"> (top-level and nested) plus any
-        # loose <p class="norm">, in document order, skipping nodes already
-        # consumed as title/subtitle.
-        body_chunks: list[str] = []
-        seen: set[int] = set()
-        for node in title_node, subtitle_node:
-            if node is not None:
-                seen.add(id(node))
-            if node is not None and node.parent is not None:
-                seen.add(id(node.parent))
+        subtitle = art_div.select_one("p.stitle-article-norm")
+        if subtitle is not None:
+            parts.append(subtitle.get_text(strip=True))
 
-        # Walk descendants in document order and collect norm blocks.
+        body_texts: list[str] = []
         for descendant in art_div.descendants:
             if not isinstance(descendant, Tag):
                 continue
-            classes = descendant.get("class", []) or []
-            is_norm_div = descendant.name == "div" and "norm" in classes
-            is_norm_p = descendant.name == "p" and "norm" in classes
-            if not (is_norm_div or is_norm_p):
+            if descendant.name not in ("div", "p"):
                 continue
-            # Skip a norm div if one of its ancestors already contributed text
-            # (we only want the most specific block, not the wrapper plus its
-            # children duplicated).
+            classes = descendant.get("class") or []
+            if "norm" not in classes:
+                continue
+            # Skip norm blocks nested inside another norm block.
+            if _has_norm_ancestor(descendant, art_div):
+                continue
             text = descendant.get_text(" ", strip=True)
-            if not text:
-                continue
-            # Deduplicate identical consecutive chunks to avoid wrapper/child
-            # overlap, while still preserving paragraph ordering.
-            if not body_chunks or body_chunks[-1] != text:
-                body_chunks.append(text)
+            if text:
+                body_texts.append(text)
 
-        if body_chunks:
-            parts.append("\n".join(body_chunks))
+        if body_texts:
+            parts.append("\n".join(body_texts))
 
-        return "\n".join(part for part in parts if part)
+        return "\n".join(parts)
+
+
+def _has_norm_ancestor(tag: Tag, container: Tag) -> bool:
+    """Return True if *tag* has a ``norm``-classed div/p ancestor below *container*."""
+    parent = tag.parent
+    while parent is not None and parent is not container:
+        if isinstance(parent, Tag) and parent.name in ("div", "p"):
+            classes = parent.get("class") or []
+            if "norm" in classes:
+                return True
+        parent = parent.parent
+    return False
