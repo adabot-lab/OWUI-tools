@@ -16,4 +16,8 @@ services:
       - .env
     restart: unless-stopped
     networks:
-      - ollama-tools
+      - owui-tools
+
+networks:
+  owui-tools:
+    external: true

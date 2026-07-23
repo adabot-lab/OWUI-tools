@@ -40,7 +40,12 @@ else:
         enable_dns_rebinding_protection=False,
     )
 
-mcp = FastMCP("Legal Paragraph Retrieval Service")
+mcp = FastMCP(
+    "Legal Paragraph Retrieval Service",
+    host=HOST,
+    port=PORT,
+    transport_security=transport_security,
+)
 
 
 @mcp.tool()
@@ -75,8 +80,8 @@ def list_laws() -> list[dict]:
     return engine.list_laws()
 
 
-# Build the ASGI app with transport security configured
-app = mcp.streamable_http_app(transport_security=transport_security)
+# Build the ASGI app
+app = mcp.streamable_http_app()
 
 
 if __name__ == "__main__":
