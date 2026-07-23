@@ -1,0 +1,32 @@
+# Law Pipeline — Source URLs
+# ============================
+# Add one URL per line. Empty lines and lines starting with # are ignored.
+#
+# The fetcher auto-detects the source type from the URL:
+#
+#   1. gesetze-im-internet.de (GII XML)
+#      URL format: https://www.gesetze-im-internet.de/<slug>/xml.zip
+#      Example:     https://www.gesetze-im-internet.de/vgv_2017/xml.zip
+#      Returns: ZIP with one XML file using the GII norm DTD.
+#
+#   2. verwaltungsvorschriften-im-internet.de (VV HTML)
+#      URL format: https://www.verwaltungsvorschriften-im-internet.de/<doc>.htm
+#      Returns: Semi-structured HTML with paragraph markers.
+#
+#   3. eur-lex.europa.eu (EUR-Lex CELLAR)
+#      URL format: https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:<CELEX_NUMBER>
+#      Example:     https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02014L0024-20260101
+#      The fetcher auto-rewrites this to the CELLAR API at publications.europa.eu
+#      to bypass the EUR-Lex WAF block.
+#
+# Add your URLs below this line:
+
+# VgV & GWB xml #
+https://www.gesetze-im-internet.de/vgv_2016/xml.zip
+https://www.gesetze-im-internet.de/gwb/xml.zip
+
+# VOB/A #
+https://www.verwaltungsvorschriften-im-internet.de/bsvwvbund_31012019_BWI781063060120180001604634.htm
+
+# RL 2024/14/EU #
+https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02014L0024-20260101

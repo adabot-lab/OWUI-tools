@@ -10,7 +10,7 @@ services:
       - MCP_PORT=8000
       # DNS-rebinding protection: disable so requests from other containers/
       # hosts are accepted. For public exposure, set MCP_ALLOWED_HOSTS instead.
-      - LEGAL_DOCUMENTS_DIR=input
+      - LEGAL_SOURCES_FILE=input/sources.txt
       - LEGAL_DB_PATH=data/legal.db
     env_file:
       - .env

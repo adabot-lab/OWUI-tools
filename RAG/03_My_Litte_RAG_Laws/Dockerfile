@@ -7,10 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY main.py db.py legal_engine.py ./
-COPY extract/ ./extract/
-
-# Input directory for law markdown files
-# data/ directory is created at runtime
+COPY fetch/ ./fetch/
 
 ENV PYTHONUNBUFFERED=1
 
