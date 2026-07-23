@@ -2,6 +2,8 @@ services:
   legal-paragraph-api:
     build: .
     container_name: my_little_rag_law_retrieval
+    ports:
+      - "8000:8000"
     volumes:
       - ./input:/app/input
       - ./data:/app/data
@@ -10,7 +12,8 @@ services:
       - MCP_PORT=8000
       # Data loading mode:
       #   serve — start with existing DB (default)
-      #   fetch — nuke DB + cache, download fresh, populate, then serve
+      #   fetch — refresh: nuke all + re-download if DB exists;
+      #          else use cache if available, else download fresh
       #   local — nuke DB, parse from data/cache/, populate, then serve
       - FETCH_MODE=${FETCH_MODE}
       - LEGAL_SOURCES_FILE=${LEGAL_SOURCES_FILE}
