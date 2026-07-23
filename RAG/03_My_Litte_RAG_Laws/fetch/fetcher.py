@@ -15,10 +15,13 @@ from urllib.parse import urlparse, parse_qs, quote
 
 import httpx
 
+from pathlib import Path
+
 from fetch.parsers.base import BaseParser, LawDocument
 from fetch.parsers.gii_xml import GiiXmlParser
 from fetch.parsers.vv_html import VVHtmlParser
 from fetch.parsers.eurlex_html import EurlexHtmlParser
+from fetch import cache as cache_mod
 
 
 # --- Source types ---
@@ -112,12 +115,14 @@ def _extract_zip_xml(raw_bytes: bytes) -> bytes:
 def fetch_one(
     url: str,
     client: httpx.Client | None = None,
+    cache_dir: Path | None = None,
 ) -> FetchResult:
     """Download and parse a single source URL.
 
     Args:
         url: The source URL (GII .zip, VV .htm, or EUR-Lex CELEX URL).
         client: Optional httpx client (one is created if not provided).
+        cache_dir: If set, save the downloaded raw data to this cache directory.
 
     Returns:
         FetchResult with the parsed LawDocument or an error message.
@@ -144,6 +149,10 @@ def fetch_one(
         if source_type == GII:
             raw_data = _extract_zip_xml(raw_data)
 
+        # Save to cache if requested (after unzip, before parse)
+        if cache_dir is not None:
+            cache_mod.save_to_cache(source_type, url, raw_data, cache_dir)
+
         parser = _get_parser(source_type)
         document = parser.parse(raw_data, source_url=url)
 
@@ -155,6 +164,38 @@ def fetch_one(
     finally:
         if own_client:
             client.close()
+
+
+def fetch_one_from_cache(
+    filename: str,
+    source_type: str,
+    original_url: str = "",
+    cache_dir: Path | None = None,
+) -> FetchResult:
+    """Parse a single source from the local cache (no network).
+
+    Args:
+        filename: Cache filename (e.g. "vgv_2016.xml").
+        source_type: Parser to use (gii_xml, vv_html, eurlex_html).
+        original_url: Original source URL (for LawDocument metadata).
+        cache_dir: Cache directory (default: data/cache).
+
+    Returns:
+        FetchResult with the parsed LawDocument or an error message.
+    """
+    cache_dir = cache_dir or cache_mod.CACHE_DIR
+    filepath = cache_dir / filename
+
+    try:
+        raw_data = filepath.read_bytes()
+        parser = _get_parser(source_type)
+        document = parser.parse(raw_data, source_url=original_url)
+        return FetchResult(url=original_url, source_type=source_type, document=document)
+
+    except Exception as e:
+        return FetchResult(
+            url=original_url, source_type=source_type, document=None, error=str(e)
+        )
 
 
 def fetch_all(urls: list[str]) -> list[FetchResult]:
@@ -182,7 +223,6 @@ def read_sources_file(path: str = "input/sources.txt") -> list[str]:
     Returns:
         List of URL strings.
     """
-    from pathlib import Path
     text = Path(path).read_text(encoding="utf-8")
     urls = []
     for line in text.splitlines():
@@ -190,3 +230,26 @@ def read_sources_file(path: str = "input/sources.txt") -> list[str]:
         if stripped and not stripped.startswith("#"):
             urls.append(stripped)
     return urls
+
+
+def fetch_all_from_cache(
+    cache_dir: Path | None = None,
+) -> list[FetchResult]:
+    """Load and parse all cached sources (no network).
+
+    Args:
+        cache_dir: Cache directory (default: data/cache).
+
+    Returns:
+        List of FetchResult, one per cached file.
+    """
+    cached = cache_mod.list_cached(cache_dir)
+    return [
+        fetch_one_from_cache(
+            entry["filename"],
+            entry["source_type"],
+            entry["url"],
+            cache_dir,
+        )
+        for entry in cached
+    ]

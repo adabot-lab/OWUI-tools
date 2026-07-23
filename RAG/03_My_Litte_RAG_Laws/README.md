@@ -17,11 +17,40 @@ fetch/fetcher.py ── download + classify by domain
        └── eur-lex.europa.eu/...CELEX:...     → fetch/parsers/eurlex_html.py
                                                    (rewritten to CELLAR API)
        │
+       ├── data/cache/ (optional offline snapshot)
+       │
        ▼
 SQLite + FTS5 (data/legal.db)
        │
        ▼
 legal_engine.py → main.py (MCP server, 3 tools)
+```
+
+## Data Loading Modes
+
+Controlled via `FETCH_MODE` env var (Docker entrypoint):
+
+| Mode | Behavior |
+|------|----------|
+| `serve` (default) | Start MCP server with existing DB. No data loading. |
+| `fetch` | **Nuke DB + cache**, download fresh from sources.txt, populate DB, save to cache, then serve. |
+| `local` | **Nuke DB**, parse from `data/cache/` (no network), populate DB, then serve. |
+
+Typical workflow:
+1. First run: `FETCH_MODE=fetch` — downloads everything, populates DB + cache.
+2. Subsequent runs: `FETCH_MODE=serve` — uses existing DB.
+3. Laws changed upstream: `FETCH_MODE=fetch` again.
+4. Offline rebuild: `FETCH_MODE=local` — uses cached files, no network.
+
+### Cache Layout
+
+```
+data/cache/
+    manifest.json              # maps filename → {url, source_type}
+    vgv_2016.xml               # GII XML (unzipped)
+    gwb.xml
+    bsvwvbund_*.htm            # VV HTML (raw)
+    eurlex_02014L0024.xhtml    # EUR-Lex XHTML (raw)
 ```
 
 ## Source Types
@@ -44,8 +73,14 @@ Edit `input/sources.txt` — one URL per line. Comments (`#`) and empty lines
 are ignored. See the file header for URL format examples.
 
 ```bash
-# Re-fetch all sources
+# Download + store in DB
 python -m fetch.run_fetch
+
+# Download + save to cache (for offline use)
+python -m fetch.run_fetch --cache
+
+# Parse from cache (no network)
+python -m fetch.run_fetch --from-cache
 
 # Dry run (fetch + validate, no DB write)
 python -m fetch.run_fetch --dry-run
@@ -57,6 +92,7 @@ All config via environment variables (`.env` file or docker-compose):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `FETCH_MODE` | `serve` | Data loading mode: serve/fetch/local |
 | `LEGAL_SOURCES_FILE` | `input/sources.txt` | Source URLs file |
 | `LEGAL_DB_PATH` | `data/legal.db` | SQLite database path |
 | `MCP_HOST` | `0.0.0.0` | MCP server bind host |
@@ -67,14 +103,21 @@ All config via environment variables (`.env` file or docker-compose):
 
 | Tool | Description |
 |------|-------------|
-| `retrieve_paragraph(law_name, section_number)` | Exact paragraph lookup by law + §/Artikel number |
+| `retrieve_paragraph(law_name, section_number)` | Exact paragraph lookup by law + section number |
 | `search_paragraphs(query, limit=20)` | Full-text search with ranked snippets |
 | `list_laws()` | List all laws with section counts |
 
 ## Docker
 
 ```bash
+# Default: serve with existing DB
 docker compose up -d --build
+
+# Fresh download + populate
+FETCH_MODE=fetch docker compose up -d --build
+
+# Offline rebuild from cache
+FETCH_MODE=local docker compose up -d --build
 ```
 
 The server listens on port 8000 at `/mcp`.
@@ -94,7 +137,7 @@ python -m pytest tests/ -v
 # Run fetch pipeline
 python -m fetch.run_fetch
 
-# Start MCP server
+# Start MCP server directly (skips entrypoint mode logic)
 python main.py
 ```
 

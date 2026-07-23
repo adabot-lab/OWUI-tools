@@ -8,8 +8,11 @@ services:
     environment:
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000
-      # DNS-rebinding protection: disable so requests from other containers/
-      # hosts are accepted. For public exposure, set MCP_ALLOWED_HOSTS instead.
+      # Data loading mode:
+      #   serve — start with existing DB (default)
+      #   fetch — nuke DB + cache, download fresh, populate, then serve
+      #   local — nuke DB, parse from data/cache/, populate, then serve
+      - FETCH_MODE=serve
       - LEGAL_SOURCES_FILE=input/sources.txt
       - LEGAL_DB_PATH=data/legal.db
     env_file:

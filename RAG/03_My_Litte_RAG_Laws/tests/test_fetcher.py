@@ -10,6 +10,7 @@ from fetch.fetcher import (
     _rewrite_eurlex_url,
     _extract_zip_xml,
     fetch_one,
+    fetch_one_from_cache,
     read_sources_file,
     FetchResult,
     GII, VV, EURLEX,
@@ -160,6 +161,79 @@ class TestFetchOne:
 
         assert result.document is None
         assert "DNS failed" in result.error
+
+
+class TestFetchOneWithCache:
+    def test_fetch_one_saves_to_cache(self, tmp_path):
+        """fetch_one with cache_dir should save raw data to cache."""
+        import zipfile, io
+        xml_content = Path("tests/testdata/vgv_sample.xml").read_bytes()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("law.xml", xml_content)
+        zip_bytes = buf.getvalue()
+
+        mock_response = MagicMock()
+        mock_response.content = zip_bytes
+        mock_response.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.get = MagicMock(return_value=mock_response)
+
+        result = fetch_one(
+            "https://www.gesetze-im-internet.de/vgv_2016/xml.zip",
+            client=mock_client,
+            cache_dir=tmp_path,
+        )
+
+        assert result.error == ""
+        # Cache file should exist
+        cached_file = tmp_path / "vgv_2016.xml"
+        assert cached_file.exists()
+        assert cached_file.read_bytes() == xml_content  # post-unzip XML
+
+        # Manifest should be updated
+        from fetch.cache import read_manifest
+        manifest = read_manifest(tmp_path)
+        assert "vgv_2016.xml" in manifest
+        assert manifest["vgv_2016.xml"]["source_type"] == "gii_xml"
+
+
+class TestFetchOneFromCache:
+    def test_parse_from_cache_gii(self, tmp_path):
+        """fetch_one_from_cache should parse GII XML without network."""
+        xml_data = Path("tests/testdata/vgv_sample.xml").read_bytes()
+        (tmp_path / "vgv_2016.xml").write_bytes(xml_data)
+
+        result = fetch_one_from_cache(
+            "vgv_2016.xml", "gii_xml",
+            original_url="https://www.gesetze-im-internet.de/vgv_2016/xml.zip",
+            cache_dir=tmp_path,
+        )
+
+        assert result.error == ""
+        assert result.document is not None
+        assert result.document.abbreviation == "VgV"
+        assert len(result.document.paragraphs) == 3
+
+    def test_parse_from_cache_vv(self, tmp_path):
+        """fetch_one_from_cache should parse VV HTML without network."""
+        html_data = Path("tests/testdata/vob_sample.htm").read_bytes()
+        (tmp_path / "vob_sample.htm").write_bytes(html_data)
+
+        result = fetch_one_from_cache(
+            "vob_sample.htm", "vv_html",
+            cache_dir=tmp_path,
+        )
+
+        assert result.error == ""
+        assert result.document is not None
+        assert result.document.abbreviation == "VOB/A"
+
+    def test_parse_from_cache_missing_file(self, tmp_path):
+        """Missing cache file should return error."""
+        result = fetch_one_from_cache("nonexistent.xml", "gii_xml", cache_dir=tmp_path)
+        assert result.document is None
+        assert "nonexistent.xml" in result.error
 
 
 class TestReadSourcesFile:
