@@ -23,6 +23,7 @@ MANIFEST_FILE = "manifest.json"
 # File extensions per source type
 _EXTENSIONS = {
     "gii_xml": ".xml",
+    "gii_html": ".html",
     "vv_html": ".htm",
     "eurlex_html": ".xhtml",
 }

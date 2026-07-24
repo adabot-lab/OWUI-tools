@@ -43,6 +43,46 @@ def _cache_has_files() -> bool:
     return len(list_cached()) > 0
 
 
+def _serve_with_incremental_fetch():
+    """Serve mode with incremental source diff.
+
+    When a DB already exists, diff sources.txt against URLs already stored.
+    Fetch only new URLs incrementally; existing laws are untouched (append-only).
+    If sources.txt is absent, skip the diff (backward compatible).
+    """
+    sources_file = os.getenv("LEGAL_SOURCES_FILE", "input/sources.txt")
+
+    if not Path(sources_file).exists():
+        print("[entrypoint] Mode: serve — DB exists, no sources file, "
+              "starting server")
+        return
+
+    from fetch.fetcher import read_sources_file, fetch_one
+    from fetch.run_fetch import store_result
+    from fetch import cache as cache_mod
+    from db import LegalDatabase
+
+    urls = read_sources_file(sources_file)
+    db = LegalDatabase(DB_PATH)
+    existing = set(db.list_source_urls())
+    # Dedupe URLs while preserving order (dict.fromkeys in py3.7+)
+    new_urls = list(dict.fromkeys(u for u in urls if u not in existing))
+
+    if not new_urls:
+        print("[entrypoint] Mode: serve — DB exists, no new sources, "
+              "starting server")
+        return
+
+    print(f"[entrypoint] serve — {len(new_urls)} new source(s) found, "
+          f"fetching incrementally...")
+    for url in new_urls:
+        result = fetch_one(url, cache_dir=cache_mod.CACHE_DIR)
+        summary = store_result(result, db)
+        if summary.get("error"):
+            print(f"  FAILED: {url} — {summary['error']}")
+    print("[entrypoint] serve — incremental fetch complete, starting server")
+
+
 def main():
     mode = FETCH_MODE.lower().strip()
 
@@ -50,8 +90,8 @@ def main():
         db_exists = Path(DB_PATH).exists()
 
         if db_exists:
-            print("[entrypoint] Mode: serve — DB exists, starting server")
-            # DB already populated, just fall through to MCP server
+            _serve_with_incremental_fetch()
+            # Fall through to MCP server
 
         elif _cache_has_files():
             # No DB but cache has files: populate from cache, then serve

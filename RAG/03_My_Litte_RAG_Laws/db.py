@@ -180,6 +180,12 @@ class LegalDatabase:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def list_source_urls(self) -> list[str]:
+        """Return all source_file URLs currently stored in the laws table."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT source_file FROM laws").fetchall()
+        return [r["source_file"] for r in rows if r["source_file"]]
+
     def list_laws(self) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(

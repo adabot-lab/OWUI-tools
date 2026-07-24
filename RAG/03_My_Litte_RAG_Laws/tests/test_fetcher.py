@@ -13,7 +13,7 @@ from fetch.fetcher import (
     fetch_one_from_cache,
     read_sources_file,
     FetchResult,
-    GII, VV, EURLEX,
+    GII, GII_HTML, VV, EURLEX,
 )
 
 
@@ -21,6 +21,10 @@ class TestDetectSourceType:
     def test_gii_zip_url(self):
         url = "https://www.gesetze-im-internet.de/vgv_2016/xml.zip"
         assert detect_source_type(url) == GII
+
+    def test_gii_html_url(self):
+        url = "https://www.gesetze-im-internet.de/gg/BJNR000010949.html"
+        assert detect_source_type(url) == GII_HTML
 
     def test_vv_url(self):
         url = "https://www.verwaltungsvorschriften-im-internet.de/bsvwvbund_123.htm"

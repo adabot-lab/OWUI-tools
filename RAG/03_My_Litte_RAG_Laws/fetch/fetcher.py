@@ -19,6 +19,7 @@ from pathlib import Path
 
 from fetch.parsers.base import BaseParser, LawDocument
 from fetch.parsers.gii_xml import GiiXmlParser
+from fetch.parsers.gii_html import GiiHtmlParser
 from fetch.parsers.vv_html import VVHtmlParser
 from fetch.parsers.eurlex_html import EurlexHtmlParser
 from fetch import cache as cache_mod
@@ -26,6 +27,7 @@ from fetch import cache as cache_mod
 
 # --- Source types ---
 GII = "gii_xml"
+GII_HTML = "gii_html"
 VV = "vv_html"
 EURLEX = "eurlex_html"
 
@@ -48,6 +50,8 @@ def _get_parser(source_type: str) -> BaseParser:
     if source_type not in _PARSERS:
         if source_type == GII:
             _PARSERS[source_type] = GiiXmlParser()
+        elif source_type == GII_HTML:
+            _PARSERS[source_type] = GiiHtmlParser()
         elif source_type == VV:
             _PARSERS[source_type] = VVHtmlParser()
         elif source_type == EURLEX:
@@ -68,6 +72,9 @@ def detect_source_type(url: str) -> str:
 
     if "gesetze-im-internet.de" in host and url.endswith(".zip"):
         return GII
+
+    if "gesetze-im-internet.de" in host and url.endswith(".html"):
+        return GII_HTML
 
     if "verwaltungsvorschriften-im-internet.de" in host:
         return VV

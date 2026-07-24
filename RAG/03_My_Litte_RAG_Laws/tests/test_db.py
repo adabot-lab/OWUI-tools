@@ -132,6 +132,26 @@ def test_reinsert_law_preserves_id(db):
     assert result["content"] == "re-extracted"
 
 
+def test_list_source_urls_returns_stored_urls(db):
+    """list_source_urls should return all source_file URLs in the laws table."""
+    db.insert_law("Law A", "LA", "2024-01-01", "https://example.com/a")
+    db.insert_law("Law B", "LB", "2024-01-01", "https://example.com/b")
+    db.insert_law("Law C", "LC", "2024-01-01", "")  # empty source_file
+
+    urls = db.list_source_urls()
+    assert "https://example.com/a" in urls
+    assert "https://example.com/b" in urls
+    # Empty source_file should be filtered out
+    assert "" not in urls
+    assert len(urls) == 2
+
+
+def test_list_source_urls_empty_db(db):
+    """list_source_urls on an empty DB should return an empty list."""
+    urls = db.list_source_urls()
+    assert urls == []
+
+
 def test_get_paragraph_strips_artikel_prefix(db):
     """Should strip 'Artikel ' prefix for EU directives, not just §."""
     law_id = db.insert_law("EU Directive", "EU-2014/24/EU", "2014-03-26", "eu.md")
