@@ -1,6 +1,7 @@
 import subprocess
 import tempfile
 import os
+import shlex
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -28,25 +29,25 @@ def run_python(req: PythonRequest):
     ) as f:
         f.write(req.code)
         filename = f.name
-
-    result = subprocess.run(
-        ["python", filename],
-        capture_output=True,
-        text=True,
-        cwd=WORKSPACE
-    )
-
-    return {
-        "stdout": result.stdout,
-        "stderr": result.stderr
-    }
+    try:
+        result = subprocess.run(
+            ["python", filename],
+            capture_output=True,
+            text=True,
+            cwd=WORKSPACE
+        )
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr
+        }
+    finally:
+        os.unlink(filename)
 
 
 @app.post("/exec/bash")
 def run_bash(req: BashRequest):
     result = subprocess.run(
-        req.command,
-        shell=True,
+        shlex.split(req.command),
         capture_output=True,
         text=True,
         cwd=WORKSPACE
