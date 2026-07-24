@@ -46,8 +46,11 @@ class LegalEngine:
                 "message": (
                     f"Law '{law['abbreviation']}' exists but \u00a7 {section_number} "
                     f"is not in the database. "
-                    f"Available sections: {range_info['min']} to {range_info['max']} "
-                    f"({range_info['total']} total sections)."
+                    f"This section may have been repealed or removed \u2014 numbering "
+                    f"in this law is not continuous. "
+                    f"The {law['abbreviation']} contains {range_info['total']} sections "
+                    f"(\u00a7 {range_info['min']} to \u00a7 {range_info['max']}, "
+                    f"with gaps from repealed provisions)."
                 ),
                 "law": law["abbreviation"],
                 "requested_section": section_number,
