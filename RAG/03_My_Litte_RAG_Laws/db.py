@@ -118,6 +118,48 @@ class LegalDatabase:
             ).fetchone()
             return dict(row) if row else None
 
+    def find_law(self, identifier: str) -> Optional[dict]:
+        """Look up a law by abbreviation OR full name (case-insensitive)."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT * FROM laws
+                   WHERE abbreviation = ? COLLATE NOCASE
+                      OR name = ? COLLATE NOCASE""",
+                (identifier, identifier)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_law_section_range(self, law_id: int) -> Optional[dict]:
+        """Return min/max numeric section numbers for a law.
+
+        Returns None if the law has no paragraphs.
+        Only considers section_numbers starting with a digit (1, 127a, 305).
+        Non-numeric (e.g. annex letters) are ignored.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT
+                       MIN(CAST(
+                           CASE WHEN section_number GLOB '[0-9]*'
+                                THEN section_number ELSE NULL END AS INTEGER
+                       )) as min_section,
+                       MAX(CAST(
+                           CASE WHEN section_number GLOB '[0-9]*'
+                                THEN section_number ELSE NULL END AS INTEGER
+                       )) as max_section,
+                       COUNT(*) as total_sections
+                   FROM paragraphs
+                   WHERE law_id = ?""",
+                (law_id,)
+            ).fetchone()
+        if not row or row["total_sections"] == 0:
+            return None
+        return {
+            "min": row["min_section"],
+            "max": row["max_section"],
+            "total": row["total_sections"],
+        }
+
     def insert_paragraph(self, law_id: int, section_number: str,
                          section_type: str, title: str, content: str):
         with self._conn() as conn:

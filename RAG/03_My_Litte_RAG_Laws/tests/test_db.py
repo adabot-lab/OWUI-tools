@@ -165,3 +165,61 @@ def test_get_paragraph_strips_artikel_prefix(db):
     # Case-insensitive
     result2 = db.get_paragraph("EU-2014/24/EU", "artikel 1")
     assert result2 is not None
+
+
+def test_get_law_section_range(db):
+    """get_law_section_range should return min/max/total for numeric sections."""
+    law_id = db.insert_law("Test Law", "TL", "2024-01-01", "test.md")
+    db.insert_paragraph(law_id, "1", "paragraph", "", "section 1 content")
+    db.insert_paragraph(law_id, "2", "paragraph", "", "section 2 content")
+    db.insert_paragraph(law_id, "10", "paragraph", "", "section 10 content")
+
+    result = db.get_law_section_range(law_id)
+    assert result is not None
+    assert result["min"] == 1
+    assert result["max"] == 10
+    assert result["total"] == 3
+
+
+def test_get_law_section_range_with_suffix(db):
+    """get_law_section_range should handle suffixed section numbers like 2a."""
+    law_id = db.insert_law("Test Law", "TL", "2024-01-01", "test.md")
+    db.insert_paragraph(law_id, "1", "paragraph", "", "section 1")
+    db.insert_paragraph(law_id, "2a", "paragraph", "", "section 2a")
+    db.insert_paragraph(law_id, "7", "paragraph", "", "section 7")
+
+    result = db.get_law_section_range(law_id)
+    assert result is not None
+    assert result["min"] == 1
+    assert result["max"] == 7
+    assert result["total"] == 3
+
+
+def test_get_law_section_range_empty_law(db):
+    """get_law_section_range should return None for law with no paragraphs."""
+    law_id = db.insert_law("Empty Law", "EL", "2024-01-01", "test.md")
+    result = db.get_law_section_range(law_id)
+    assert result is None
+
+
+def test_find_law_by_full_name(db):
+    """find_law should match by full name, abbreviation, and return None for miss."""
+    db.insert_law("Test Gesetz Vollname", "TGV", "2024-01-01", "test.md")
+
+    # Match by full name
+    result = db.find_law("Test Gesetz Vollname")
+    assert result is not None
+    assert result["abbreviation"] == "TGV"
+
+    # Match by abbreviation
+    result = db.find_law("TGV")
+    assert result is not None
+    assert result["abbreviation"] == "TGV"
+
+    # Case-insensitive abbreviation
+    result = db.find_law("tgv")
+    assert result is not None
+
+    # Nonexistent
+    result = db.find_law("NONEXISTENT")
+    assert result is None

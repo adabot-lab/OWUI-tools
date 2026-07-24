@@ -54,9 +54,15 @@ def retrieve_paragraph(law_name: str, section_number: str) -> dict:
     Retrieve a specific legal paragraph by law name and section number.
     Returns the exact paragraph content for a given law and section.
 
+    On error, returns a dict with an 'error' key:
+      - error='law_not_found': the law doesn't exist in the database.
+        Includes 'available_laws' list.
+      - error='section_not_found': the law exists but the section doesn't.
+        Includes 'available_range' with min/max/total section numbers.
+
     Args:
         law_name: Law abbreviation (e.g., "VgV", "GWB") or full name.
-        section_number: Section number (e.g., "97" for § 97).
+        section_number: Section number (e.g., "97" for section 97).
     """
     return engine.retrieve_paragraph(law_name, section_number)
 

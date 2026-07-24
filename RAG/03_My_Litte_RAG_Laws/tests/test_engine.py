@@ -20,17 +20,35 @@ def test_retrieve_by_abbreviation(engine):
     assert result is not None
     assert result["law_abbreviation"] == "VgV"
     assert "Gegenstand" in result["content"]
+    assert "error" not in result
 
 
 def test_retrieve_by_full_name(engine):
     result = engine.retrieve_paragraph("Verordnung über die Vergabe", "2")
     assert result is not None
     assert result["section_number"] == "2"
+    assert "error" not in result
 
 
 def test_retrieve_not_found(engine):
     result = engine.retrieve_paragraph("VgV", "999")
-    assert result is None
+    assert result["error"] == "section_not_found"
+    assert "available_range" in result
+    assert result["available_range"]["max"] == 2
+
+
+def test_retrieve_not_found_law_missing(engine):
+    """retrieve_paragraph with nonexistent law should return law_not_found error."""
+    result = engine.retrieve_paragraph("NONEXISTENT", "1")
+    assert result["error"] == "law_not_found"
+    assert "available_laws" in result
+
+
+def test_retrieve_not_found_section_missing(engine):
+    """retrieve_paragraph with existing law but missing section should return section_not_found."""
+    result = engine.retrieve_paragraph("VgV", "999")
+    assert result["error"] == "section_not_found"
+    assert result["available_range"]["max"] == 2
 
 
 def test_search(engine):
