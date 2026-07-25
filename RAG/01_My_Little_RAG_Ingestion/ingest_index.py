@@ -32,10 +32,11 @@ EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "CPP_snowflake-embed-l-
 VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", 1024))  # Embedding dimension
 
 # OpenAI
-# NOTE: env var fallback logic MUST stay in sync with RAG/02 (retrieval_engine.py)
+# Ingestion uses OPENAI_BASE_URL ONLY. BASE_URL is the fast ingestion host; it
+# may also serve the main LLM, and batch unloading of that LLM during ingestion
+# is acceptable. Retrieval (RAG/02) uses OPENAI_RETRIEVAL_URL to avoid this.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.getenv("OPENAI_RETRIEVAL_URL") or os.getenv("OPENAI_BASE_URL")
-# OPENAI_RETRIEVAL_URL takes priority; falls back to OPENAI_BASE_URL
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 # Ollama
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
