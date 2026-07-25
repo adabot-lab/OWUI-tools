@@ -730,7 +730,6 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                 if len(sentences) > 1:
                     # We have multiple sentences, try to group them respecting MAX_CHUNK_SIZE
                     sentence_buffer = []
-                    sentence_buffer_token_count = 0
 
                     for sentence in sentences:
                         sentence_token_count = estimate_token_count(sentence)
@@ -752,8 +751,15 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                                 })
                                 chunk_id += 1
                         else:
-                            # Check if adding this sentence would exceed MAX_CHUNK_SIZE
-                            if sentence_buffer and (sentence_buffer_token_count + sentence_token_count) > MAX_CHUNK_SIZE:
+                            # Re-encode the full proposed buffer to get the exact
+                            # token count. Do NOT sum per-sentence counts — BPE
+                            # tokenizers are not additive, so the joined text can
+                            # tokenize to more (or fewer) tokens than the sum of
+                            # the parts. Mirrors _split_words_by_token_budget and
+                            # guarantees the MAX_CHUNK_SIZE cap holds exactly.
+                            candidate = sentence_buffer + [sentence]
+                            candidate_text = " ".join(candidate)
+                            if sentence_buffer and estimate_token_count(candidate_text) > MAX_CHUNK_SIZE:
                                 # Emit current buffer as chunk
                                 processed_chunks.append({
                                     "doc_id": doc["doc_id"],
@@ -765,11 +771,9 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                                 chunk_id += 1
                                 # Start new buffer with current sentence
                                 sentence_buffer = [sentence]
-                                sentence_buffer_token_count = sentence_token_count
                             else:
                                 # Add sentence to buffer
                                 sentence_buffer.append(sentence)
-                                sentence_buffer_token_count += sentence_token_count
 
                     # Emit remaining sentences in buffer if any
                     if sentence_buffer:
@@ -796,11 +800,35 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                         })
                         chunk_id += 1
             else:
-                # Add paragraph to buffer
-                buffer.append(para)
-                buffer_token_count += token_count
+                # Pre-add MAX cap check: re-encode the full proposed buffer to
+                # verify the joined text stays under MAX_CHUNK_SIZE. BPE
+                # tokenizers are not additive, so '\n\n'.join(buffer + [para])
+                # can tokenize to more than the sum of the individual paragraph
+                # counts. Mirrors _split_words_by_token_budget and the sentence
+                # path above; guarantees the cap holds exactly. When flushing,
+                # the emitted buffer was already verified <= MAX when its last
+                # paragraph was committed, so it stays within bounds.
+                candidate = buffer + [para]
+                candidate_text = "\n\n".join(candidate)
+                if buffer and estimate_token_count(candidate_text) > MAX_CHUNK_SIZE:
+                    processed_chunks.append({
+                        "doc_id": doc["doc_id"],
+                        "chunk_id": chunk_id,
+                        "text": "\n\n".join(buffer),
+                        "source": doc["source"],
+                        "collection_name": doc.get("collection_name"),
+                    })
+                    chunk_id += 1
+                    buffer = [para]
+                    buffer_token_count = token_count
+                else:
+                    buffer = candidate
+                    buffer_token_count += token_count
 
-                # If buffer has reached minimum size, emit as chunk
+                # If buffer has reached minimum size, emit as chunk.
+                # The rough running sum is fine for the MIN threshold; the exact
+                # MAX cap was already enforced by the pre-add check above, and
+                # the buffer just committed is <= MAX by construction.
                 if buffer_token_count >= MIN_CHUNK_SIZE:
                     processed_chunks.append({
                         "doc_id": doc["doc_id"],
