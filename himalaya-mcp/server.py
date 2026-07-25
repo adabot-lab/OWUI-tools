@@ -79,7 +79,12 @@ async def _himalaya(*args) -> dict:
            "--output", "json", "--quiet"] + list(args)
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"error": "himalaya command timed out after 30 seconds", "returncode": -1}
     if proc.returncode != 0:
         return {"error": stderr.decode().strip(), "returncode": proc.returncode}
     try:
@@ -94,7 +99,12 @@ async def _himalaya_stdin(args: list, stdin_data: str) -> dict:
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    stdout, stderr = await proc.communicate(input=stdin_data.encode())
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(input=stdin_data.encode()), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"error": "himalaya command timed out after 30 seconds", "returncode": -1}
     if proc.returncode != 0:
         return {"error": stderr.decode().strip(), "returncode": proc.returncode}
     try:
@@ -153,8 +163,8 @@ async def message_export(
     account: Optional[str] = None,
 ) -> str:
     """Export raw MIME (for ICS/calendar parsing). Defaults to peek=true.
-    Since 'message export' has no --preview flag, peek is achieved by
-    immediately removing \\Seen flag after export (atomic).
+    Since message export has no --preview flag, peek is achieved by immediately removing \\Seen flag after export.
+    NOTE: This is NOT atomic — between export (which marks \\Seen) and flag removal, the message briefly appears as read. This is a known race condition with no better workaround in the himalaya CLI.
     Exports to a temp dir, reads back the .eml content, cleans up."""
     import tempfile, glob, os
     tmpdir = tempfile.mkdtemp(prefix="himalaya_export_")
@@ -177,7 +187,7 @@ async def message_export(
         os.rmdir(tmpdir)
     except OSError:
         pass
-    # Undo auto-Seen from export (atomic, before return)
+    # Undo auto-Seen from export (before return)
     if peek and "error" not in result:
         await _himalaya("flag", "remove", *_acc(account), "-f", folder, id, "seen")
     output = result if "error" in result else {

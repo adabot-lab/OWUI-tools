@@ -1,7 +1,7 @@
 """
 Web Search MCP Server — Streamable HTTP Transport
 ===================================================
-MCP server providing web search (via SearXNG + DuckDuckGo) and page fetching
+MCP server providing web search (via SearXNG) and page fetching
 with content extraction (trafilatura + readability fallback).
 
 Uses MCP Streamable HTTP transport (protocol version 2025-03-26) instead of
@@ -38,7 +38,6 @@ from mcp.server.fastmcp import FastMCP
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng:8040")
 SEARXNG_TIMEOUT = int(os.getenv("SEARXNG_TIMEOUT", "15"))
 USE_SEARXNG_SEARCH = os.getenv("USE_SEARXNG_SEARCH", "yes").lower() == "yes"
-USE_DUCKDUCKGO_SEARCH = os.getenv("USE_DUCKDUCKGO_SEARCH", "yes").lower() == "yes"
 
 TIKA_SERVER_URL = os.getenv("TIKA_SERVER_URL", "")
 USE_TIKA = bool(TIKA_SERVER_URL)
@@ -103,60 +102,6 @@ async def _search_searxng(query: str, num_results: int) -> list[dict]:
             return results[:num_results]
         except Exception as e:
             print(f"SearXNG search error: {e}", flush=True)
-            return []
-
-
-# ── Search: DuckDuckGo HTML ──────────────────────────────────────────────────
-
-async def _search_duckduckgo(query: str, num_results: int) -> list[dict]:
-    """Search via DuckDuckGo HTML scraping."""
-    url = "https://html.duckduckgo.com/html"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    }
-    data = {"q": query, "b": "", "kl": ""}
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            resp = await client.post(url, data=data, headers=headers)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            results = []
-            for element in soup.select(".result"):
-                if len(results) >= num_results:
-                    break
-                title_elem = element.select_one(".result__title a")
-                if not title_elem:
-                    continue
-                title = title_elem.get_text(strip=True)
-                link = title_elem.get("href", "")
-
-                # Clean DDG redirect URLs
-                if "//duckduckgo.com/l/?uddg=" in link:
-                    link = urllib.parse.unquote(link.split("uddg=")[1].split("&")[0])
-                elif "/l/?" in link:
-                    parsed = urllib.parse.urlparse(link)
-                    qs = urllib.parse.parse_qs(parsed.query)
-                    if "uddg" in qs:
-                        link = urllib.parse.unquote(qs["uddg"][0])
-
-                if "y.js" in link or not link.startswith(("http://", "https://")):
-                    continue
-
-                snippet_elem = element.select_one(".result__snippet")
-                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-
-                if title and link:
-                    results.append({
-                        "title": title,
-                        "url": link,
-                        "snippet": snippet,
-                        "engine": "duckduckgo",
-                    })
-            return results
-        except Exception as e:
-            print(f"DuckDuckGo search error: {e}", flush=True)
             return []
 
 
@@ -311,6 +256,15 @@ async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH, inclu
             "truncated": False,
         }
 
+    if BeautifulSoup is None:
+        return {
+            "url": url,
+            "title": "",
+            "content": "Failed to parse HTML: BeautifulSoup not available",
+            "content_length": 0,
+            "truncated": False,
+        }
+
     # Extract title
     soup = BeautifulSoup(html, "html.parser")
     title = ""
@@ -353,16 +307,15 @@ async def web_search(
     num_results: int = 10,
     engines: Optional[list[str]] = None,
 ) -> str:
-    """Search the web using SearXNG and/or DuckDuckGo. Returns a list of results
+    """Search the web using SearXNG. Returns a list of results
     with title, URL, and snippet for each. Use this tool to find information on
     the internet. Prefer specific queries for better results.
 
     Args:
         query: The search query — be specific for better results.
         num_results: Number of results to return (1-20, default: 10).
-        engines: Which engines to use. Default: all available. 'searxng' aggregates
-                 Google, Bing, Brave, DuckDuckGo, Startpage. 'duckduckgo' is a
-                 direct HTML scrape fallback. Options: ["searxng", "duckduckgo"].
+        engines: Which engines to use. Default: all available. Currently only
+                 "searxng" is supported. Options: ["searxng"].
     """
     import asyncio
     import json
@@ -373,12 +326,10 @@ async def web_search(
         engines = []
         if USE_SEARXNG_SEARCH and SEARXNG_URL:
             engines.append("searxng")
-        if USE_DUCKDUCKGO_SEARCH:
-            engines.append("duckduckgo")
 
     if not engines:
         return json.dumps({
-            "error": "No search engines available. Configure SEARXNG_URL or enable DuckDuckGo."
+            "error": "No search engines available. Configure SEARXNG_URL."
         })
 
     # Run searches concurrently
@@ -386,8 +337,6 @@ async def web_search(
     for engine in engines:
         if engine == "searxng" and USE_SEARXNG_SEARCH:
             tasks.append(_search_searxng(query, num_results))
-        elif engine == "duckduckgo" and USE_DUCKDUCKGO_SEARCH:
-            tasks.append(_search_duckduckgo(query, num_results))
 
     results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -457,8 +406,6 @@ async def health_check() -> str:
     available = []
     if USE_SEARXNG_SEARCH and SEARXNG_URL:
         available.append("searxng")
-    if USE_DUCKDUCKGO_SEARCH:
-        available.append("duckduckgo")
 
     # Quick SearXNG ping
     searxng_ok = False
@@ -487,7 +434,6 @@ async def health_check() -> str:
         "config": {
             "SEARXNG_URL": SEARXNG_URL,
             "USE_SEARXNG_SEARCH": USE_SEARXNG_SEARCH,
-            "USE_DUCKDUCKGO_SEARCH": USE_DUCKDUCKGO_SEARCH,
             "PAGE_FETCH_TIMEOUT": PAGE_FETCH_TIMEOUT,
             "PAGE_MAX_CONTENT_LENGTH": PAGE_MAX_CONTENT_LENGTH,
         },
