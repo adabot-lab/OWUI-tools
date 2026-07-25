@@ -48,9 +48,6 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 
 # Chunking
 MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", 600))  # Maximum tokens per chunk
-# Word-fallback chunking uses word counts, not token counts. ~1.5 tokens/word
-# for English/German, so divide MAX_CHUNK_SIZE by 1.5 to bound the chunk size.
-MAX_CHUNK_SIZE_WORDS = int(MAX_CHUNK_SIZE / 1.5)
 MIN_CHUNK_SIZE = int(os.getenv("MIN_CHUNK_SIZE", 200))  # Minimum tokens per chunk
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))    # Reserved: overlap between chunks (not yet implemented in chunking logic)
 
@@ -653,6 +650,45 @@ def split_sentences_respecting_bounds(text: str) -> List[str]:
 
 
 
+def _split_words_by_token_budget(
+    words: List[str], max_tokens: int = MAX_CHUNK_SIZE
+) -> List[str]:
+    """Split a list of words into chunks that each respect the token budget.
+
+    Greedily accumulates words into a chunk, re-measuring the FULL proposed
+    chunk text each iteration, until adding the next word would exceed
+    ``max_tokens``; then starts a new chunk. Re-measuring the whole buffer
+    (rather than summing per-word deltas) guarantees the cap holds exactly,
+    because BPE tokenizers like tiktoken are not additive — ``encode(" a b")``
+    need not equal ``encode(" a") + encode(" b")``. This guarantees no chunk
+    exceeds the cap regardless of language or content type (German compound
+    words, markdown tables, long URLs, etc.).
+
+    A single word whose own token count exceeds ``max_tokens`` is emitted as
+    its own chunk — we cannot split below word granularity without destroying
+    content. This is acceptable: a 600-token single token would require ~2400
+    characters with no whitespace, which does not occur in natural text.
+    """
+    if not words:
+        return []
+    chunks: List[str] = []
+    current_words: List[str] = []
+    for word in words:
+        # Re-encode the full proposed chunk to get the exact token count —
+        # do NOT rely on a running sum, which drifts for non-additive BPE.
+        candidate = current_words + [word]
+        candidate_text = " ".join(candidate)
+        if estimate_token_count(candidate_text) > max_tokens and current_words:
+            # This word would overflow; flush current buffer and start fresh.
+            chunks.append(" ".join(current_words))
+            current_words = [word]
+        else:
+            current_words = candidate
+    if current_words:
+        chunks.append(" ".join(current_words))
+    return chunks
+
+
 def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Split document into paragraph-level chunks with minimum size enforcement"""
     if not isinstance(doc, dict) or 'text' not in doc:
@@ -700,12 +736,11 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                         sentence_token_count = estimate_token_count(sentence)
 
                         if sentence_token_count > MAX_CHUNK_SIZE:
-                            # Individual sentence is too large, split by words as fallback
-                            words = sentence.split()
-                            sentence_chunks = [
-                                " ".join(words[i:i+MAX_CHUNK_SIZE_WORDS])
-                                for i in range(0, len(words), MAX_CHUNK_SIZE_WORDS)
-                            ]
+                            # Individual sentence is too large; split by words
+                            # with token-aware budgeting so no chunk exceeds cap.
+                            sentence_chunks = _split_words_by_token_budget(
+                                sentence.split()
+                            )
 
                             for chunk_text in sentence_chunks:
                                 processed_chunks.append({
@@ -747,12 +782,9 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                         })
                         chunk_id += 1
                 else:
-                    # Fallback to word-based splitting if no sentences were found
-                    words = para.split()
-                    para_chunks = [
-                        " ".join(words[i:i+MAX_CHUNK_SIZE_WORDS])
-                        for i in range(0, len(words), MAX_CHUNK_SIZE_WORDS)
-                    ]
+                    # Fallback to word-based splitting if no sentences were found.
+                    # Token-aware so no chunk exceeds cap even for German compounds.
+                    para_chunks = _split_words_by_token_budget(para.split())
 
                     for chunk_text in para_chunks:
                         processed_chunks.append({
