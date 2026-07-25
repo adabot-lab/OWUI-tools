@@ -9,6 +9,9 @@ class StripHermesHandler(CustomLogger):
     before the request is forwarded to Z.AI (glm) models.
     """
 
+    # Case-sensitive on purpose: only match the specific branded form
+    # ("Hermes Agent", "Hermes"), NOT lowercase "hermes" or "HERMES" which
+    # may appear in user content or URLs and must not be stripped.
     TARGETS = ("Hermes Agent", "Hermes",)   # add more if needed
     REPLACEMENT = "the agent"
 
