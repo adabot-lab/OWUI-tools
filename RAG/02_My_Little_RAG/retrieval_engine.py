@@ -68,7 +68,7 @@ class RetrievalEngine:
     """Class that encapsulates all retrieval functionality"""
 
     def __init__(self):
-        self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=30)
         self.embedding_func = get_embedding_function()
 
     def list_collections(self) -> List[Dict[str, Any]]:

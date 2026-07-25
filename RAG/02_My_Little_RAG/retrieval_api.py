@@ -1,3 +1,5 @@
+import asyncio
+from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from retrieval_engine import RetrievalEngine
 
@@ -8,10 +10,10 @@ retrieval_engine = RetrievalEngine()
 mcp = FastMCP("Qdrant Retrieval Service")
 
 @mcp.tool()
-def search(
+async def search(
     query: str,
     top_k: int = 10,
-    collection_name: str = None
+    collection_name: Optional[str] = None
 ) -> list[dict]:
     """
     General hybrid search across all documents in the Qdrant collection.
@@ -24,14 +26,14 @@ def search(
     Returns:
         List of search results with rank, score, payload, and content
     """
-    return retrieval_engine.search(query, top_k, collection_name)
+    return await asyncio.to_thread(retrieval_engine.search, query=query, top_k=top_k, collection_name=collection_name)
 
 @mcp.tool()
-def search_by_file(
+async def search_by_file(
     query: str,
     file_name: str,
     top_k: int = 10,
-    collection_name: str = None
+    collection_name: Optional[str] = None
 ) -> list[dict]:
     """
     Hybrid search within a specific file in the Qdrant collection.
@@ -45,23 +47,23 @@ def search_by_file(
     Returns:
         List of search results with rank, score, payload, and content from the specified file
     """
-    return retrieval_engine.search_by_file(query, file_name, top_k, collection_name)
+    return await asyncio.to_thread(retrieval_engine.search_by_file, query=query, file_name=file_name, top_k=top_k, collection_name=collection_name)
 
 @mcp.tool()
-def list_collections() -> list[dict]:
+async def list_collections() -> list[dict]:
     """
     List all available Qdrant collections.
 
     Returns:
         List of collection information including name and point count
     """
-    return retrieval_engine.list_collections()
+    return await asyncio.to_thread(retrieval_engine.list_collections)
 
 @mcp.tool()
-def text_search(
+async def text_search(
     query: str,
     top_k: int = 10,
-    collection_name: str = None
+    collection_name: Optional[str] = None
 ) -> list[dict]:
     """
     Text-only search across all documents in knowledge base
@@ -75,14 +77,14 @@ def text_search(
     Returns:
         List of search results with rank, score, content, file name and collection name
     """
-    return retrieval_engine.text_search(query, top_k, collection_name)
+    return await asyncio.to_thread(retrieval_engine.text_search, query=query, top_k=top_k, collection_name=collection_name)
 
 @mcp.tool()
-def text_search_by_file(
+async def text_search_by_file(
     query: str,
     file_name: str,
     top_k: int = 10,
-    collection_name: str = None
+    collection_name: Optional[str] = None
 ) -> list[dict]:
     """
     Text-only search within a specific document
@@ -97,7 +99,7 @@ def text_search_by_file(
     Returns:
         List of search results with rank, score, content, file name and collection name from the specified file
     """
-    return retrieval_engine.text_search_by_file(query, file_name, top_k, collection_name)
+    return await asyncio.to_thread(retrieval_engine.text_search_by_file, query=query, file_name=file_name, top_k=top_k, collection_name=collection_name)
 
 # Create the FastAPI app for the streamable HTTP transport
 app = mcp.streamable_http_app()

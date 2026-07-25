@@ -1,4 +1,6 @@
+import asyncio
 import os
+from typing import Optional
 from fastapi import FastAPI
 from openapi_routes import router as openapi_router
 
@@ -18,10 +20,10 @@ if TRANSPORT_TYPE == "mcp":
     mcp = FastMCP("Qdrant Retrieval Service")
 
     @mcp.tool()
-    def search(
+    async def search(
         query: str,
         top_k: int = 10,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> list[dict]:
         """
         Comprehensive hybrid search across all documents in the knowledge base
@@ -60,14 +62,14 @@ if TRANSPORT_TYPE == "mcp":
             - If query is empty: Returns error message indicating query parameter is required
             - If connection fails: Returns error message about connection issues
         """
-        return retrieval_engine.search(query, top_k, collection_name)
+        return await asyncio.to_thread(retrieval_engine.search, query=query, top_k=top_k, collection_name=collection_name)
 
     @mcp.tool()
-    def search_by_file(
+    async def search_by_file(
         query: str,
         file_name: str,
         top_k: int = 10,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> list[dict]:
         """
         Targeted hybrid search within a specific document in the knowledge base
@@ -113,10 +115,10 @@ if TRANSPORT_TYPE == "mcp":
             - If query is empty: Returns error message indicating query parameter is required
             - If connection fails: Returns error message about connection issues
         """
-        return retrieval_engine.search_by_file(query, file_name, top_k, collection_name)
+        return await asyncio.to_thread(retrieval_engine.search_by_file, query=query, file_name=file_name, top_k=top_k, collection_name=collection_name)
 
     @mcp.tool()
-    def list_collections() -> list[dict]:
+    async def list_collections() -> list[dict]:
         """
         List all available knowledge collections and their metadata
 
@@ -166,13 +168,13 @@ if TRANSPORT_TYPE == "mcp":
             - If Qdrant server is unavailable: Returns error message about connection issues
             - If no collections exist: Returns empty list
         """
-        return retrieval_engine.list_collections()
+        return await asyncio.to_thread(retrieval_engine.list_collections)
 
     @mcp.tool()
-    def text_search(
+    async def text_search(
         query: str,
         top_k: int = 10,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> list[dict]:
         """
         Keyword-focused text search across all documents in the knowledge base
@@ -212,14 +214,14 @@ if TRANSPORT_TYPE == "mcp":
             - If connection fails: Returns error message about connection issues
             - If collection doesn't support sparse vectors: Returns error message explaining the limitation
         """
-        return retrieval_engine.text_search(query, top_k, collection_name)
+        return await asyncio.to_thread(retrieval_engine.text_search, query=query, top_k=top_k, collection_name=collection_name)
 
     @mcp.tool()
-    def text_search_by_file(
+    async def text_search_by_file(
         query: str,
         file_name: str,
         top_k: int = 10,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> list[dict]:
         """
         Keyword-focused text search within a specific document in the knowledge base
@@ -266,7 +268,7 @@ if TRANSPORT_TYPE == "mcp":
             - If connection fails: Returns error message about connection issues
             - If collection doesn't support sparse vectors: Returns error message explaining the limitation
         """
-        return retrieval_engine.text_search_by_file(query, file_name, top_k, collection_name)
+        return await asyncio.to_thread(retrieval_engine.text_search_by_file, query=query, file_name=file_name, top_k=top_k, collection_name=collection_name)
 
     # Run the MCP server directly
     app = mcp.streamable_http_app()
