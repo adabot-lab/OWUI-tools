@@ -7,7 +7,7 @@ tiktoken
 
 # Langchain & related
 langchain
-langchain-openai
+langchain-openai==1.4.1
 langchain-ollama
 #langchain-text-splitters
 

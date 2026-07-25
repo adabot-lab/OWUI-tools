@@ -32,8 +32,10 @@ EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "CPP_snowflake-embed-l-
 VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", 1024))  # Embedding dimension
 
 # OpenAI
+# NOTE: env var fallback logic MUST stay in sync with RAG/02 (retrieval_engine.py)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
+OPENAI_BASE_URL = os.getenv("OPENAI_RETRIEVAL_URL") or os.getenv("OPENAI_BASE_URL")
+# OPENAI_RETRIEVAL_URL takes priority; falls back to OPENAI_BASE_URL
 
 # Ollama
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -726,8 +728,8 @@ def get_embedding_function():
             else:  # OpenAI and OpenAI-compatible providers
                 return OpenAIEmbeddings(
                     model=EMBEDDING_MODEL_NAME,
-                    openai_api_key=OPENAI_API_KEY,
-                    openai_api_base=OPENAI_BASE_URL,
+                    api_key=OPENAI_API_KEY,
+                    base_url=OPENAI_BASE_URL,
                     chunk_size=50,
                 )
         except Exception as e:

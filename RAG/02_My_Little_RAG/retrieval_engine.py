@@ -25,9 +25,10 @@ EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "CPP_snowflake-embed-l-
 VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", 1024))  # Embedding dimension
 
 # OpenAI
+# NOTE: env var fallback logic MUST stay in sync with RAG/01 (ingest_index.py)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_RETRIEVAL_URL") or os.getenv("OPENAI_BASE_URL")
-# Note: OPENAI_RETRIEVAL_URL takes priority; falls back to OPENAI_BASE_URL
+# OPENAI_RETRIEVAL_URL takes priority; falls back to OPENAI_BASE_URL
 
 # Ollama
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
