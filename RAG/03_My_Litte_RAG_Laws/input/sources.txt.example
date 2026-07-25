@@ -15,18 +15,19 @@
 #
 #   3. eur-lex.europa.eu (EUR-Lex CELLAR)
 #      URL format: https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:<CELEX_NUMBER>
-#      Example:     https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02014L0024-20260101
+#      Example:     https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02016R0679-20160504
 #      The fetcher auto-rewrites this to the CELLAR API at publications.europa.eu
 #      to bypass the EUR-Lex WAF block.
 #
 # Add your URLs below this line:
 
-# VgV & GWB xml #
-https://www.gesetze-im-internet.de/vgv_2016/xml.zip
-https://www.gesetze-im-internet.de/gwb/xml.zip
+# --- Examples (one per supported source type) ---
 
-# VOB/A #
-https://www.verwaltungsvorschriften-im-internet.de/bsvwvbund_31012019_BWI781063060120180001604634.htm
+# GII XML
+# https://www.gesetze-im-internet.de/vgv_2017/xml.zip
 
-# RL 2024/14/EU #
-https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02014L0024-20260101
+# VV HTML
+# https://www.verwaltungsvorschriften-im-internet.de/example_doc.htm
+
+# EUR-Lex (CELLAR)
+# https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02016R0679-20160504
