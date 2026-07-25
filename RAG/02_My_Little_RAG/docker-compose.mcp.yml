@@ -22,6 +22,7 @@ services:
       # OpenAI-specific settings (only used when PROVIDER=openai)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - OPENAI_RETRIEVAL_URL=${OPENAI_RETRIEVAL_URL}
       # Ollama-specific settings (only used when PROVIDER=ollama)
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       # Application path
