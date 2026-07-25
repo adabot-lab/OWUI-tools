@@ -48,6 +48,9 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 
 # Chunking
 MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", 600))  # Maximum tokens per chunk
+# Word-fallback chunking uses word counts, not token counts. ~1.5 tokens/word
+# for English/German, so divide MAX_CHUNK_SIZE by 1.5 to bound the chunk size.
+MAX_CHUNK_SIZE_WORDS = int(MAX_CHUNK_SIZE / 1.5)
 MIN_CHUNK_SIZE = int(os.getenv("MIN_CHUNK_SIZE", 200))  # Minimum tokens per chunk
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))    # Reserved: overlap between chunks (not yet implemented in chunking logic)
 
@@ -95,6 +98,16 @@ class Logger:
         print(f"{'='*50}")
 
 logger = Logger()
+
+# Optional: tiktoken gives an accurate BPE token count for chunk sizing.
+# requirements.txt already pins it; import is guarded so the module still loads
+# if the package is unavailable in a minimal environment.
+_TIKTOKEN_ENC = None
+try:
+    import tiktoken as _tiktoken_mod
+    _TIKTOKEN_ENC = _tiktoken_mod.get_encoding("cl100k_base")
+except Exception as _tiktoken_err:  # pragma: no cover - environment dependent
+    logger.log(f"tiktoken unavailable; falling back to heuristic token estimate: {_tiktoken_err}", "WARNING")
 
 # BM25 configuration
 BM25_LANGUAGE = os.getenv("BM25_LANGUAGE", "german")
@@ -268,10 +281,31 @@ def remove_yaml_front_matter(text: str) -> str:
     result = re.sub(pattern, '', text, count=1, flags=re.DOTALL)
     return result.strip()
 
-def get_next_doc_id(collection_name: str = None) -> int:
-    """Get the next available document ID"""
+def get_next_doc_id(collection_name: str = None, stored_metadata: Dict[str, Any] = None) -> int:
+    """Get the next available document ID.
+
+    Reads the cached max doc_id from file_metadata.json (``_counters`` -> collection)
+    when available, instead of scanning every chunk JSON on disk. The cached value is
+    the highest assigned doc_id for the collection; the next free id is that + 1.
+    Seeded by scanning the chunks directory on first use.
+    """
+    if collection_name is None:
+        collection_name = QDRANT_COLLECTION  # Maintain backward compatibility
+
+    # Fast path: use cached max doc_id from metadata if present
+    if stored_metadata is not None:
+        cached = stored_metadata.get('_counters', {}).get(collection_name)
+        if cached is not None:
+            return int(cached) + 1
+
+    # Fallback / seeding path: scan chunks directory once to find current max
     existing_ids = get_existing_doc_ids(collection_name)
-    return max(existing_ids, default=0) + 1
+    max_existing = max(existing_ids, default=0)
+
+    if stored_metadata is not None:
+        # Cache the max assigned id (not max+1) so the fast path returns max+1.
+        stored_metadata.setdefault('_counters', {})[collection_name] = max_existing
+    return max_existing + 1
 
 def get_collection_name_from_path(file_path: Path) -> str:
     """Get collection name from file path based on subfolder, with sanitization"""
@@ -366,13 +400,28 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
 
     # Process each collection separately
     for collection_name, file_list in files_by_collection.items():
-        # Get doc ID counter for this collection
-        doc_id_counter = get_next_doc_id(collection_name)
+        # Get doc ID counter for this collection (fast path via metadata cache)
+        doc_id_counter = get_next_doc_id(collection_name, stored_metadata=stored_metadata)
 
         for path, file_key in file_list:
             try:
                 current_mtime = os.path.getmtime(path)
-                current_hash = get_file_hash(path)
+                # Cheap path: if stored mtime is unchanged, reuse the stored hash
+                # and skip the full file read + SHA256. Only hash when mtime moved.
+                stored_collection_meta = (
+                    stored_metadata.get(file_key, {})
+                    .get('collections', {})
+                    .get(collection_name)
+                )
+                if (
+                    not force_reindex
+                    and stored_collection_meta
+                    and stored_collection_meta.get('embedded')
+                    and abs(current_mtime - stored_collection_meta.get('mtime', -1)) <= 1
+                ):
+                    current_hash = stored_collection_meta.get('hash', '')
+                else:
+                    current_hash = get_file_hash(path)
             except OSError as e:
                 logger.log(f"Could not access file {path}: {e}", "WARNING")
                 continue
@@ -453,6 +502,19 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
                     "collection_name": collection_name  # Add collection name to track where to store this doc
                 })
 
+        # Persist the highest assigned doc_id for this collection so the next
+        # run reads it from metadata instead of rescanning chunk JSONs.
+        # doc_id_counter points one past the last assigned id (when any were
+        # allocated this run); cache counter as max_assigned (= counter - 1).
+        if doc_id_counter > 0:
+            stored_metadata.setdefault('_counters', {})[collection_name] = doc_id_counter - 1
+
+    # Persist the updated max doc_id counters so the next run can read them
+    # from metadata instead of rescanning every chunk JSON on disk.
+    counters = stored_metadata.get('_counters', {})
+    if counters:
+        current_metadata.setdefault('_counters', {}).update(counters)
+
     # Check for deleted files (only if not force reindexing)
     if not force_reindex:
         deleted_files = set(stored_metadata.keys()) - set(current_metadata.keys())
@@ -521,9 +583,27 @@ def split_into_paragraphs(text: str) -> list[str]:
 
 
 def estimate_token_count(text: str) -> int:
-    # Rough heuristic adjusted for German compound words
-    # (~1.5x tokens per whitespace-split segment)
-    return int(len(text.split()) * 1.5)
+    """Estimate the token count for text.
+
+    Uses tiktoken (cl100k_base, the encoding for GPT-4/ada embeddings and a
+    reasonable proxy for other modern BPE tokenizers) when available. Falls back
+    to a character-based heuristic that is more accurate than a flat word count
+    multiplier for German compound words and CJK-style text.
+    """
+    if not text:
+        return 0
+    try:
+        enc = _TIKTOKEN_ENC
+    except NameError:
+        pass
+    else:
+        if enc is not None:
+            return len(enc.encode(text))
+    # Fallback heuristic: ~4 characters per token on average for mixed
+    # English/German text. Whitespace-separated words average ~1.5 tokens for
+    # German, but character-based estimation degrades more gracefully for very
+    # long compound words and languages without spaces.
+    return max(1, len(text) // 4)
 
 
 def split_sentences_respecting_bounds(text: str) -> List[str]:
@@ -623,8 +703,8 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                             # Individual sentence is too large, split by words as fallback
                             words = sentence.split()
                             sentence_chunks = [
-                                " ".join(words[i:i+MAX_CHUNK_SIZE])
-                                for i in range(0, len(words), MAX_CHUNK_SIZE)
+                                " ".join(words[i:i+MAX_CHUNK_SIZE_WORDS])
+                                for i in range(0, len(words), MAX_CHUNK_SIZE_WORDS)
                             ]
 
                             for chunk_text in sentence_chunks:
@@ -670,8 +750,8 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                     # Fallback to word-based splitting if no sentences were found
                     words = para.split()
                     para_chunks = [
-                        " ".join(words[i:i+MAX_CHUNK_SIZE])
-                        for i in range(0, len(words), MAX_CHUNK_SIZE)
+                        " ".join(words[i:i+MAX_CHUNK_SIZE_WORDS])
+                        for i in range(0, len(words), MAX_CHUNK_SIZE_WORDS)
                     ]
 
                     for chunk_text in para_chunks:
@@ -1171,9 +1251,6 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
                         # Track files that were successfully embedded for later marking
                         for chunk in valid_chunks:
                             successfully_embedded_files.add(chunk['source'])
-
-                        # Add a small delay between batches to reduce server load
-                        time.sleep(0.05)
 
                         break  # Success, exit retry loop
 
