@@ -4,7 +4,6 @@ from typing import List, Optional, Dict, Any
 import httpx
 import asyncio
 import os
-from urllib.parse import urlencode
 from bs4 import BeautifulSoup
 import trafilatura
 from readability import Document
@@ -24,7 +23,6 @@ SEARXNG_URL = os.getenv("SEARXNG_URL", "")
 
 # Enablement flags
 USE_GOOGLE_SEARCH = os.getenv("USE_GOOGLE_SEARCH", "yes").lower() == "yes"
-USE_DUCKDUCKGO_SEARCH = os.getenv("USE_DUCKDUCKGO_SEARCH", "yes").lower() == "yes"
 USE_SEARXNG_SEARCH = os.getenv("USE_SEARXNG_SEARCH", "yes").lower() == "yes"
 SEARXNG_TIMEOUT = int(os.getenv("SEARXNG_TIMEOUT", "10"))
 
@@ -39,7 +37,7 @@ class SearchRequest(BaseModel):
     Attributes:
         query (str): The search query - should be clear and specific (REQUIRED)
         num_results (int): Number of search results to return (1-20, default: 10)
-        engines (List[str]): Which search engines to use - options: "google", "duckduckgo", "searxng" (default: uses all available)
+        engines (List[str]): Which search engines to use - options: "google", "searxng" (default: uses all available)
         concurrent_requests (int): Number of concurrent requests (default: 3)
     """
     query: str
@@ -52,7 +50,7 @@ class SearchRequest(BaseModel):
             "example": {
                 "query": "latest developments in renewable energy",
                 "num_results": 5,
-                "engines": ["google", "duckduckgo", "searxng"],
+                "engines": ["google", "searxng"],
                 "concurrent_requests": 3
             }
         }
@@ -146,8 +144,6 @@ def get_enabled_engines() -> List[str]:
     engines = []
     if USE_GOOGLE_SEARCH and GOOGLE_PSE_API_KEY and GOOGLE_PSE_CX:
         engines.append("google")
-    if USE_DUCKDUCKGO_SEARCH:
-        engines.append("duckduckgo")
     if USE_SEARXNG_SEARCH and SEARXNG_URL:
         engines.append("searxng")
     return engines
@@ -234,54 +230,59 @@ async def fetch_html_content(url: str) -> str:
     ]
 
     # Try different configurations
-    configs = [
-        {"timeout": PAGE_FETCH_TIMEOUT, "follow_redirects": True},
-        {"timeout": PAGE_FETCH_TIMEOUT, "follow_redirects": False},
-        {"timeout": PAGE_FETCH_TIMEOUT + 5, "follow_redirects": True},  # Longer timeout
-        {"timeout": PAGE_FETCH_TIMEOUT + 10, "follow_redirects": True},  # Even longer timeout
-    ]
+    # Primary attempt: first header set, follow redirects (covers the common case).
+    # On 403/429/401 only, try ONE alternate header set. On timeout/connection error,
+    # fail immediately (network issue, not a header issue). Max 2 total attempts.
+    primary_headers = headers_options[0]
+    alternate_headers = headers_options[1] if len(headers_options) > 1 else primary_headers
 
-    # Try with different headers and client configurations
-    for headers in headers_options:
-        for config in configs:
+    # Primary attempt
+    try:
+        async with httpx.AsyncClient(
+            timeout=PAGE_FETCH_TIMEOUT, follow_redirects=True
+        ) as client:
+            response = await client.get(url, headers=primary_headers)
+            response.raise_for_status()
+
+            # Check the content type from the response
+            content_type = response.headers.get("content-type", "")
+            if is_pdf_content_type(content_type):
+                # PDF detected via content-type — pass in-memory bytes to avoid re-download
+                return await extract_pdf_content_with_tika(url, pdf_bytes=response.content)
+            else:
+                # It's HTML content, return as text
+                return response.text
+
+    except httpx.TimeoutException:
+        # Network issue — do NOT retry with different headers.
+        raise HTTPException(status_code=504, detail=f"Timeout fetching page {url} after {PAGE_FETCH_TIMEOUT} seconds.")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in [403, 429, 401]:
+            # Blocking response — try ONE alternate header set.
+            print(f"HTTP {e.response.status_code} with primary headers; trying alternate headers for {url}")
             try:
-                # Create a new client for each attempt with specific configuration
                 async with httpx.AsyncClient(
-                    timeout=config["timeout"],
-                    follow_redirects=config["follow_redirects"]
+                    timeout=PAGE_FETCH_TIMEOUT, follow_redirects=True
                 ) as client:
-                    response = await client.get(url, headers=headers)
+                    response = await client.get(url, headers=alternate_headers)
                     response.raise_for_status()
 
-                    # Check the content type from the response
                     content_type = response.headers.get("content-type", "")
                     if is_pdf_content_type(content_type):
-                        # PDF detected via content-type — pass in-memory bytes to avoid re-download
                         return await extract_pdf_content_with_tika(url, pdf_bytes=response.content)
                     else:
-                        # It's HTML content, return as text
                         return response.text
+            except Exception as alt_e:
+                print(f"Alternate headers also failed for {url}: {alt_e}")
+                # Fall through to the final failure below.
+        else:
+            # Other HTTP error (404, 500, ...) — do NOT retry.
+            raise HTTPException(status_code=e.response.status_code, detail=f"Error fetching page {url}: {str(e)}")
+    except httpx.RequestError as e:
+        # Connection error — do NOT retry.
+        raise HTTPException(status_code=502, detail=f"Connection error fetching page {url}: {str(e)}")
 
-            except httpx.TimeoutException:
-                print(f"Timeout with headers {headers['User-Agent'][:50]}... and config {config}")
-                continue  # Try next configuration
-            except httpx.HTTPStatusError as e:
-                print(f"HTTP {e.response.status_code} error with headers {headers['User-Agent'][:50]}... and config {config}")
-                # Some sites return special codes to indicate they're blocking requests
-                if e.response.status_code in [403, 429, 401]:  # Forbidden, Too Many Requests, Unauthorized
-                    continue  # Try next configuration
-                else:
-                    # Re-raise if it's a different type of error (like 404, 500)
-                    raise HTTPException(status_code=e.response.status_code, detail=f"Error fetching page {url}: {str(e)}")
-            except httpx.RequestError as e:
-                print(f"Request error '{str(e)}' with headers {headers['User-Agent'][:50]}... and config {config}")
-                # Skip to next configuration if it's a connection error
-                continue
-            except Exception as e:
-                print(f"General error '{str(e)}' with headers {headers['User-Agent'][:50]}... and config {config}")
-                continue
-
-    # If all attempts failed, raise a comprehensive error
+    # If the primary and the single alternate 403/429/401 attempt both failed
     raise HTTPException(status_code=400, detail=f"All attempts to fetch page {url} failed. The site may be blocking automated requests, require specific authentication, or the URL may not exist.")
 
 def clean_html_content(html: str, url: str) -> str:
@@ -384,84 +385,6 @@ async def search_google(query: str, num_results: int) -> List[SearchResult]:
             print(f"Google search error: {e}")
             return []
 
-async def search_duckduckgo(query: str, num_results: int) -> List[SearchResult]:
-    """Search using DuckDuckGo HTML scraping"""
-    url = "https://html.duckduckgo.com/html"
-
-    # Prepare the headers to mimic a browser request
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-
-    # Prepare form data for POST request
-    data = {
-        "q": query,
-        "b": "",  # Leave blank to let DDG auto-fill
-        "kl": "", # Leave blank to use default location
-    }
-
-    async with httpx.AsyncClient() as client:
-        try:
-            # Use POST request to search
-            response = await client.post(url, data=data, headers=headers, timeout=30.0)
-            response.raise_for_status()
-
-            # Parse the HTML response
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            results = []
-            # Find result containers - DuckDuckGo uses .result class for each search result
-            result_elements = soup.select('.result')
-
-            for idx, element in enumerate(result_elements):
-                if len(results) >= num_results:
-                    break
-
-                # Extract title and link
-                title_elem = element.select_one('.result__title a')
-                if not title_elem:
-                    continue
-
-                title = title_elem.get_text(strip=True)
-                link = title_elem.get('href', '')
-
-                # Clean DuckDuckGo redirect URLs
-                if link.startswith('//duckduckgo.com/l/?uddg='):
-                    link = urllib.parse.unquote(link.split('uddg=')[1].split('&')[0])
-                elif link.startswith('/l/?'):
-                    # Handle other redirect formats
-                    href_parts = urllib.parse.urlparse(link)
-                    query_params = urllib.parse.parse_qs(href_parts.query)
-                    if 'uddg' in query_params:
-                        link = urllib.parse.unquote(query_params['uddg'][0])
-
-                # Skip if the link is an ad or invalid
-                if 'y.js' in link or not link.startswith(('http://', 'https://')):
-                    continue
-
-                # Extract snippet
-                snippet_elem = element.select_one('.result__snippet')
-                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-
-                if title and link:
-                    results.append(SearchResult(
-                        title=title,
-                        url=link,
-                        snippet=snippet,
-                        engine="duckduckgo"
-                    ))
-
-            return results
-        except httpx.TimeoutException:
-            print(f"DuckDuckGo search timeout: {url}")
-            return []
-        except httpx.HTTPError as e:
-            print(f"DuckDuckGo HTTP error: {e}")
-            return []
-        except Exception as e:
-            print(f"DuckDuckGo search error: {e}")
-            return []
-
 async def search_searxng(query: str, num_results: int) -> List[SearchResult]:
     """Search using SearXNG JSON API"""
     if not SEARXNG_URL:
@@ -471,7 +394,7 @@ async def search_searxng(query: str, num_results: int) -> List[SearchResult]:
     params = {
         "q": query,
         "format": "json",
-        "language": "en",
+        "language": "auto",
         "safesearch": "0",
         "categories": "general"
     }
@@ -510,32 +433,29 @@ async def search_searxng(query: str, num_results: int) -> List[SearchResult]:
 
 async def fetch_page_content(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH) -> PageFetchResponse:
     """Fetch and extract text content from a web page"""
-    try:
-        html = await fetch_html_content(url)
-        cleaned_text = clean_html_content(html, url)
-        
-        # Get title using BeautifulSoup for consistency
-        soup = BeautifulSoup(html, 'html.parser')
-        title = ""
-        if soup.title:
-            title = soup.title.get_text()
-        elif soup.find('h1'):
-            title = soup.find('h1').get_text()
-        
-        # Truncate if necessary
-        truncated = len(cleaned_text) > max_length
-        if truncated:
-            cleaned_text = cleaned_text[:max_length] + "... [content truncated]"
-        
-        return PageFetchResponse(
-            url=url,
-            title=title,
-            content=cleaned_text,
-            content_length=len(cleaned_text),
-            truncated=truncated
-        )
-    except Exception as e:
-        raise e
+    html = await fetch_html_content(url)
+    cleaned_text = clean_html_content(html, url)
+
+    # Get title using BeautifulSoup for consistency
+    soup = BeautifulSoup(html, 'html.parser')
+    title = ""
+    if soup.title:
+        title = soup.title.get_text()
+    elif soup.find('h1'):
+        title = soup.find('h1').get_text()
+
+    # Truncate if necessary
+    truncated = len(cleaned_text) > max_length
+    if truncated:
+        cleaned_text = cleaned_text[:max_length] + "... [content truncated]"
+
+    return PageFetchResponse(
+        url=url,
+        title=title,
+        content=cleaned_text,
+        content_length=len(cleaned_text),
+        truncated=truncated
+    )
 
 @app.post("/search", response_model=SearchResponse,
           summary="Web Search Tool",
@@ -547,7 +467,7 @@ async def fetch_page_content(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH
           ## Important Parameters
           - `query`: The search query - should be clear and specific (REQUIRED)
           - `num_results`: Number of search results to return, between 1-20 (default: 10)
-          - `engines`: Which search engines to use - options: "google", "duckduckgo", "searxng" (default: uses all available)
+          - `engines`: Which search engines to use - options: "google", "searxng" (default: uses all available)
 
           ## Usage Examples
           Good: `{"query": "machine learning applications healthcare", "num_results": 5}`
@@ -555,7 +475,7 @@ async def fetch_page_content(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH
           Private search: `{"query": "privacy focused search engine", "num_results": 5, "engines": ["searxng"]}`
 
           ## Common Errors
-          - If you get an error about "no valid search engines", it means the server isn't configured with API keys for Google or has issues with DuckDuckGo or SearXNG
+          - If you get an error about "no valid search engines", it means the server isn't configured with API keys for Google or has issues with SearXNG
           - If query is too vague or empty, you'll get poor results""")
 async def web_search(request: SearchRequest):
     """
@@ -590,8 +510,6 @@ async def web_search(request: SearchRequest):
             available_engines = []
             if GOOGLE_PSE_API_KEY and GOOGLE_PSE_CX:
                 available_engines.append("google")
-            if USE_DUCKDUCKGO_SEARCH:
-                available_engines.append("duckduckgo")
             if USE_SEARXNG_SEARCH and SEARXNG_URL:
                 available_engines.append("searxng")
 
@@ -601,7 +519,6 @@ async def web_search(request: SearchRequest):
                 Available: {available_engines}.
                 Configured: Google API key={'SET' if GOOGLE_PSE_API_KEY else 'NOT SET'},
                 Google CX={'SET' if GOOGLE_PSE_CX else 'NOT SET'},
-                DuckDuckGo enabled={USE_DUCKDUCKGO_SEARCH},
                 SearXNG enabled={USE_SEARXNG_SEARCH}, URL={'SET' if SEARXNG_URL else 'NOT SET'}.
                 Please configure environment variables."""
             )
@@ -616,7 +533,7 @@ async def web_search(request: SearchRequest):
             detail=f"""No valid search engines specified.
             Requested engines: {request.engines},
             Available engines: {enabled_engines}.
-            Valid options are: google, duckduckgo, searxng"""
+            Valid options are: google, searxng"""
         )
 
     search_tasks = []
@@ -624,9 +541,6 @@ async def web_search(request: SearchRequest):
     # Create tasks for each search engine
     if "google" in engines_to_use:
         search_tasks.append(search_google(request.query, request.num_results))
-
-    if "duckduckgo" in engines_to_use:
-        search_tasks.append(search_duckduckgo(request.query, request.num_results))
 
     if "searxng" in engines_to_use:
         search_tasks.append(search_searxng(request.query, request.num_results))
@@ -646,6 +560,15 @@ async def web_search(request: SearchRequest):
             continue
         if result:
             all_results.extend(result)
+
+    # Deduplicate by URL (keep first occurrence)
+    seen_urls = set()
+    unique_results = []
+    for r in all_results:
+        if r.url not in seen_urls:
+            seen_urls.add(r.url)
+            unique_results.append(r)
+    all_results = unique_results
 
     # Limit to requested number of results
     limited_results = all_results[:request.num_results]
@@ -720,7 +643,7 @@ async def fetch_page(request: PageFetchRequest):
 
          ## What You Get Back
          - status: "ok" if running properly
-         - enabled_engines: Which search engines are available (e.g., ["google", "duckduckgo", "searxng"])
+         - enabled_engines: Which search engines are available (e.g., ["google", "searxng"])
          - Configuration details showing timeout values and other settings
 
          ## Common Errors
@@ -731,8 +654,6 @@ async def health_check():
     available_engines = []
     if GOOGLE_PSE_API_KEY and GOOGLE_PSE_CX:
         available_engines.append("google")
-    if USE_DUCKDUCKGO_SEARCH:
-        available_engines.append("duckduckgo")
     if USE_SEARXNG_SEARCH and SEARXNG_URL:
         available_engines.append("searxng")
 
@@ -743,7 +664,6 @@ async def health_check():
         "available_engines": available_engines,
         "config": {
             "USE_GOOGLE_SEARCH": USE_GOOGLE_SEARCH,
-            "USE_DUCKDUCKGO_SEARCH": USE_DUCKDUCKGO_SEARCH,
             "USE_SEARXNG_SEARCH": USE_SEARXNG_SEARCH,
             "SEARXNG_URL_SET": bool(SEARXNG_URL),
             "GOOGLE_PSE_API_KEY_SET": bool(GOOGLE_PSE_API_KEY),
@@ -757,11 +677,11 @@ async def health_check():
                 "parameters": {
                     "query": "The search query - should be clear and specific (REQUIRED)",
                     "num_results": "Number of search results to return (1-20, default: 10)",
-                    "engines": "Which search engines to use - options: 'google', 'duckduckgo', 'searxng' (default: uses all available)"
+                    "engines": "Which search engines to use - options: 'google', 'searxng' (default: uses all available)"
                 },
                 "usage_examples": [
                     {"query": "machine learning applications healthcare", "num_results": 5},
-                    {"query": "renewable energy statistics 2024", "num_results": 3, "engines": ["duckduckgo"]},
+                    {"query": "renewable energy statistics 2024", "num_results": 3, "engines": ["searxng"]},
                     {"query": "privacy focused search", "num_results": 5, "engines": ["searxng"]}
                 ]
             },
