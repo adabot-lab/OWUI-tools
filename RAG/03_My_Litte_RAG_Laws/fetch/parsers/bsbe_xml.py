@@ -1,32 +1,23 @@
-"""Parser for gesetze-im-internet.de (GII) XML law texts.
+"""Parser for gesetze.berlin.de (BSBE) XML law texts.
 
-GII publishes laws as XML with a <dokumente> root containing <norm> children.
-The first <norm> holds law-level metadata; subsequent <norm> elements hold
-individual paragraphs (§) with their text content.
+BSBE publishes laws as XML in the GII norm DTD structure but differs from
+GII in that <textdaten> contains inline HTML (h4, p, dl, dt, dd) rather
+than GII's <text><Content><P> elements. Metadata extraction (norm-level
+metadaten) is identical to GiiXmlParser.
+
+Source type: bsbe_xml
 """
 from __future__ import annotations
 
-import re
 import xml.etree.ElementTree as ET
+
+from bs4 import BeautifulSoup
 
 from fetch.parsers.base import BaseParser, LawDocument, Paragraph, extract_section_number
 
 
-# Tags whose presence signals a non-paragraph norm that should be skipped.
-_SKIP_ENBEZ = {"Inhaltsübersicht"}
-
-
-def _strip_noindex(element: ET.Element) -> str:
-    """Concatenate all text under *element*, unwrapping <noindex> wrappers.
-
-    Uses itertext() so that nested structure (lists, emphasis, etc.) is
-    flattened to plain text while still keeping the visible text.
-    """
-    return "".join(element.itertext()).strip()
-
-
-class GiiXmlParser(BaseParser):
-    """Parse gesetze-im-internet.de XML into a LawDocument."""
+class BsbeXmlParser(BaseParser):
+    """Parse gesetze.berlin.de GII norm DTD XML into a LawDocument."""
 
     def parse(self, raw_data: bytes | str, source_url: str = "") -> LawDocument:
         if isinstance(raw_data, bytes):
@@ -76,45 +67,59 @@ class GiiXmlParser(BaseParser):
                 continue
 
             enbez = enbez_el.text.strip()
-            if enbez in _SKIP_ENBEZ:
-                continue
-
             section_number = extract_section_number(enbez)
             if not section_number:
                 continue
 
-            # Extract title if present.
-            title = ""
-            titel_el = metadaten.find("titel")
-            if titel_el is not None:
-                title = "".join(titel_el.itertext()).strip()
-
-            # Extract content from textdaten/text/Content/P...
+            # Extract textdaten inner HTML using BeautifulSoup
             textdaten = norm.find("textdaten")
             if textdaten is None:
                 continue
 
-            text_el = textdaten.find("text")
-            if text_el is None:
-                continue
+            # Serialize textdaten inner HTML back to string for BeautifulSoup
+            inner_html = "".join(
+                ET.tostring(child, encoding="unicode") for child in textdaten
+            )
+            soup = BeautifulSoup(inner_html, "html.parser")
 
-            content_el = text_el.find("Content")
-            if content_el is None:
-                # Skip norms that only carry footnotes.
-                continue
+            # Remove <div class="jnhtml"> (footnotes / standangaben)
+            for jnhtml in soup.find_all("div", class_="jnhtml"):
+                jnhtml.decompose()
 
+            # Extract title from <h4>
+            title = ""
+            h4 = soup.find("h4")
+            if h4 is not None:
+                # The h4 contains "§ N\nTitle" — extract just the title part
+                h4_text = h4.get_text(separator=" ", strip=True)
+                # Remove the "§ N" or "§ N/" prefix
+                # e.g. "§ 1 Zweck des Gesetzes" -> "Zweck des Gesetzes"
+                import re
+                title = re.sub(r"^\s*§\s*\d+[a-zA-Z]?\s*/?\s*", "", h4_text).strip()
+
+            # Extract content from <p> tags (each p is one Absatz)
+            # Skip <p> tags inside <dl> (those are rendered as list items)
             p_parts: list[str] = []
-            for p in content_el.findall("P"):
-                p_text = _strip_noindex(p)
+            for p_tag in soup.find_all("p"):
+                if p_tag.find_parent("dl") is not None:
+                    continue
+                p_text = p_tag.get_text(separator=" ", strip=True)
                 if p_text:
                     p_parts.append(p_text)
+
+            # Also include <dl> content for numbered lists
+            dl = soup.find("dl")
+            if dl is not None:
+                dl_text = dl.get_text(separator=" ", strip=True)
+                if dl_text:
+                    p_parts.append(dl_text)
 
             if not p_parts:
                 continue
 
             content_body = "\n".join(p_parts)
 
-            # Build the "§ N Title" prefix like the old extractor output.
+            # Build the "§ N Title" prefix
             header = f"§ {section_number}"
             if title:
                 header = f"{header} {title}"

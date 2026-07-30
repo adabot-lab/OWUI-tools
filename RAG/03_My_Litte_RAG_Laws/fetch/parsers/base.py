@@ -1,6 +1,7 @@
 """Base parser interface and shared data classes for law source parsers."""
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -34,6 +35,23 @@ class LawDocument:
             }
             for p in self.paragraphs
         ]
+
+
+def extract_section_number(enbez: str) -> str:
+    """Extract the bare section number from an <enbez> value.
+
+    Examples:
+        "§ 1"      -> "1"
+        "§ 127a"   -> "127a"
+        "§ 12 Abs. 3" -> "12"
+    """
+    # Match an optional §, then capture digits and any trailing letter suffix.
+    match = re.search(r"§\s*(\d+[a-zA-Z]?)", enbez)
+    if match:
+        return match.group(1)
+    # Fallback: first run of alphanumerics if no § present.
+    match = re.match(r"\s*(\d+[a-zA-Z]?)", enbez)
+    return match.group(1) if match else enbez.strip()
 
 
 class BaseParser(ABC):

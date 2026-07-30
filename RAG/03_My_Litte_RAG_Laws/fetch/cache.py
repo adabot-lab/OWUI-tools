@@ -26,6 +26,7 @@ _EXTENSIONS = {
     "gii_html": ".html",
     "vv_html": ".htm",
     "eurlex_html": ".xhtml",
+    "bsbe_xml": ".xml",
 }
 
 
@@ -49,10 +50,20 @@ def _slugify(url: str, source_type: str) -> str:
             else:
                 celex = v
             break
-        # Strip date suffix: 02014L0024-20260101 → 02014L0024
+        # Strip date suffix: 02014L0024-20260101 -> 02014L0024
         if "-" in celex:
             celex = celex.split("-")[0]
         return f"eurlex_{celex}" if celex else "eurlex_unknown"
+
+    if source_type == "bsbe_xml":
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        j_values = qs.get("j", [])
+        if j_values:
+            return j_values[0]
+        # Fallback: use path components
+        parts = [p for p in parsed.path.split("/") if p]
+        return parts[-1] if parts else "unknown"
 
     parsed = urlparse(url)
     parts = [p for p in parsed.path.split("/") if p]

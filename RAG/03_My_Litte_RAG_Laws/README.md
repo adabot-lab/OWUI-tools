@@ -14,8 +14,10 @@ fetch/fetcher.py ── download + classify by domain
        │
        ├── gesetze-im-internet.de/*.zip      → fetch/parsers/gii_xml.py
        ├── verwaltungsvorschriften-.../*.htm  → fetch/parsers/vv_html.py
-       └── eur-lex.europa.eu/...CELEX:...     → fetch/parsers/eurlex_html.py
-                                                   (rewritten to CELLAR API)
+       ├── eur-lex.europa.eu/...CELEX:...     → fetch/parsers/eurlex_html.py
+       │                                          (rewritten to CELLAR API)
+       └── gesetze.berlin.de/perma?j=...      → fetch/parsers/bsbe_xml.py
+                                                  (AIZ ZIP download, HTTP/2)
        │
        ├── data/cache/ (optional offline snapshot)
        │
@@ -51,6 +53,7 @@ data/cache/
     gwb.xml
     bsvwvbund_*.htm            # VV HTML (raw)
     eurlex_02014L0024.xhtml    # EUR-Lex XHTML (raw)
+    VergabeG_BE.xml            # BSBE XML (extracted from AIZ ZIP)
 ```
 
 ## Source Types
@@ -62,10 +65,15 @@ The fetcher auto-detects the source type from the URL domain:
 | **GII** (gesetze-im-internet.de) | `.../<slug>/xml.zip` | ZIP with GII norm DTD XML |
 | **VV** (verwaltungsvorschriften-im-internet.de) | `.../<doc>.htm` | Semi-structured HTML |
 | **EUR-Lex** (eur-lex.europa.eu) | `...?uri=CELEX:<number>` | ELI-annotated XHTML (via CELLAR API) |
+| **BSBE** (gesetze.berlin.de) | `.../perma?j=<law_id>` | GII norm DTD XML via AIZ ZIP (HTTP/2) |
 
 EUR-Lex URLs are automatically rewritten to the CELLAR API at
 `publications.europa.eu/resource/celex/{CELEX}` to bypass the AWS WAF block
 on the EUR-Lex frontend.
+
+BSBE URLs use the jportal AIZ ZIP endpoint — the fetcher resolves the perma
+redirect, establishes a session via POST /init, and downloads the AIZ ZIP
+containing the law XML.
 
 ## Adding Laws
 
@@ -149,6 +157,7 @@ Test fixtures are trimmed versions of real source documents in
 - `vgv_sample.xml` — GII XML (VgV, 3 paragraphs)
 - `vob_sample.htm` — VV HTML (VOB/A, 5 paragraphs across 3 Abschnitte)
 - `eurlex_sample.xhtml` — EUR-Lex XHTML (RL 2014/24/EU, 3 articles)
+- `berlavg_sample.xml` — BSBE XML (BerlAVG, 3 paragraphs with HTML textdaten)
 
 ```bash
 python -m pytest tests/ -v          # full suite

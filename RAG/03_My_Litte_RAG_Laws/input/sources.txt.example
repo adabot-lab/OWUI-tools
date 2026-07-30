@@ -15,9 +15,15 @@
 #
 #   3. eur-lex.europa.eu (EUR-Lex CELLAR)
 #      URL format: https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:<CELEX_NUMBER>
-#      Example:     https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02016R0679-20160504
+#      Example:     https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02014L0024-20260101
 #      The fetcher auto-rewrites this to the CELLAR API at publications.europa.eu
 #      to bypass the EUR-Lex WAF block.
+#
+#   4. gesetze.berlin.de (BSBE XML)
+#      URL format: https://gesetze.berlin.de/perma?j=<LAW_ABBREVIATION>
+#      Example:     https://gesetze.berlin.de/perma?j=VergabeG_BE
+#      Returns: GII norm DTD XML (uses perma redirect + AIZ ZIP download).
+#      Requires HTTP/2. The law abbreviation (j=) maps to the law's jurisdiction ID.
 #
 # Add your URLs below this line:
 
@@ -31,3 +37,6 @@
 
 # EUR-Lex (CELLAR)
 # https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02016R0679-20160504
+
+# BSBE (gesetze.berlin.de, requires HTTP/2)
+# https://gesetze.berlin.de/perma?j=VergabeG_BE

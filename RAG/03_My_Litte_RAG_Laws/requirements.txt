@@ -7,8 +7,8 @@ uvicorn>=0.20.0
 # Environment handling
 python-dotenv>=1.0.0
 
-# HTTP client (fetcher downloads)
-httpx>=0.24.0
+# HTTP client (fetcher downloads) — HTTP/2 required for BSBE (gesetze.berlin.de)
+httpx[http2]>=0.24.0
 
 # HTML/XML parsing for deterministic law source parsers
 beautifulsoup4>=4.12.0

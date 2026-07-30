@@ -22,6 +22,7 @@ from fetch.parsers.gii_xml import GiiXmlParser
 from fetch.parsers.gii_html import GiiHtmlParser
 from fetch.parsers.vv_html import VVHtmlParser
 from fetch.parsers.eurlex_html import EurlexHtmlParser
+from fetch.parsers.bsbe_xml import BsbeXmlParser
 from fetch import cache as cache_mod
 
 
@@ -30,6 +31,7 @@ GII = "gii_xml"
 GII_HTML = "gii_html"
 VV = "vv_html"
 EURLEX = "eurlex_html"
+BSBE = "bsbe_xml"
 
 
 @dataclass
@@ -56,6 +58,8 @@ def _get_parser(source_type: str) -> BaseParser:
             _PARSERS[source_type] = VVHtmlParser()
         elif source_type == EURLEX:
             _PARSERS[source_type] = EurlexHtmlParser()
+        elif source_type == BSBE:
+            _PARSERS[source_type] = BsbeXmlParser()
         else:
             raise ValueError(f"Unknown source type: {source_type}")
     return _PARSERS[source_type]
@@ -81,6 +85,9 @@ def detect_source_type(url: str) -> str:
 
     if "eur-lex.europa.eu" in host:
         return EURLEX
+
+    if "gesetze.berlin.de" in host:
+        return BSBE
 
     raise ValueError(f"Cannot determine source type for URL: {url}")
 
@@ -119,6 +126,131 @@ def _extract_zip_xml(raw_bytes: bytes) -> bytes:
         return zf.read(xml_names[0])
 
 
+def _fetch_bsbe(url: str) -> bytes:
+    """Download a gesetze.berlin.de AIZ ZIP and return the content.xml bytes.
+
+    The BSBE portal requires:
+      1. Resolve perma redirect -> docId
+      2. POST /init with r3autologin cookie + CSRF headers -> JSESSIONID
+      3. GET AIZ ZIP -> unzip content.xml
+
+    Each call creates its own httpx.Client(http2=True) — HTTP/2 is required
+    (HTTP/1.1 gets security_wrongDomain).
+
+    Returns:
+        Raw bytes of the extracted content.xml
+
+    Raises:
+        ValueError: If the ZIP cannot be found or extracted.
+    """
+    import datetime as _dt
+    import time as _time
+
+    client = httpx.Client(
+        http2=True,
+        cookies={"r3autologin": "bsbe"},
+        timeout=60.0,
+        follow_redirects=True,
+    )
+
+    try:
+        # Step 1: Resolve permalink -> extract docId
+        resp = client.get(url)
+        resp.raise_for_status()
+        doc_id_match = re.search(r"docId=([a-zA-Z0-9-]+)", str(resp.url))
+        if not doc_id_match:
+            raise ValueError(f"Could not extract docId from final URL: {resp.url}")
+        doc_id = doc_id_match.group(1)
+
+        # Step 2: Init session (establishes JSESSIONID cookie)
+        init_resp = client.post(
+            "https://gesetze.berlin.de/jportal/wsrest/recherche3/init?portalId=bsbe",
+            headers={
+                "X-CSRF-TOKEN": "r3autologin",
+                "JURIS-PORTALID": "bsbe",
+                "Content-Type": "application/json;charset=UTF-8",
+            },
+            json={
+                "portalId": "bsbe",
+                "clientID": "bsbe",
+                "clientVersion": "bsbe - V08_33_01",
+                "r3ID": "bsbe",
+            },
+        )
+        init_resp.raise_for_status()
+        init_data = init_resp.json()
+        aiz_slug = init_data.get("aizSlug", "bsbeAizDownload")
+
+        # Step 3: Extract j= value from perma URL for slug construction
+        parsed_url = urlparse(url)
+        qs = parse_qs(parsed_url.query)
+        j_value = (qs.get("j") or [""])[0]
+
+        # Try candidate slugs for the AIZ download.
+        # Primary pattern: <j_value>_<year>.zip for recent years.
+        # Fallback: search API if all years fail.
+        current_year = _dt.date.today().year
+        candidate_years = [2020, 2024, 2025, current_year, current_year - 1, 2023, 2022, 2021]
+        candidate_years = list(dict.fromkeys(candidate_years))  # dedupe preserving order
+
+        zip_bytes = None
+        for year in candidate_years:
+            slug = f"{j_value}_{year}.zip"
+            zip_url = (
+                f"https://gesetze.berlin.de/jportal/{aiz_slug}/{slug}"
+                f"?doc.id={doc_id}&doc.part=X"
+            )
+            zip_resp = client.get(zip_url)
+            if zip_resp.status_code == 200:
+                zip_bytes = zip_resp.content
+                break
+            # Brief pause to avoid hammering on 404s
+            _time.sleep(0.1)
+
+        # Fallback: search API for aizZipUrl
+        if zip_bytes is None:
+            search_resp = client.post(
+                "https://gesetze.berlin.de/jportal/wsrest/recherche3/search?portalId=bsbe",
+                headers={
+                    "X-CSRF-TOKEN": "r3autologin",
+                    "JURIS-PORTALID": "bsbe",
+                    "Content-Type": "application/json;charset=UTF-8",
+                },
+                json={
+                    "portalId": "bsbe",
+                    "docId": doc_id,
+                    "searchMask": "aktuelleNorm",
+                    "searchMode": "ADVANCED",
+                    "r3ID": "bsbe",
+                },
+            )
+            search_resp.raise_for_status()
+            search_data = search_resp.json()
+            other_rep = search_data.get("otherRepresentations", {})
+            if isinstance(other_rep, dict):
+                aiz_zip_url = other_rep.get("aizZipUrl", "")
+            elif isinstance(other_rep, list):
+                aiz_zip_url = other_rep[0].get("aizZipUrl", "") if other_rep else ""
+            else:
+                aiz_zip_url = ""
+            if aiz_zip_url:
+                zip_resp = client.get(aiz_zip_url)
+                zip_resp.raise_for_status()
+                zip_bytes = zip_resp.content
+
+        if zip_bytes is None:
+            raise ValueError(
+                f"Could not download AIZ ZIP for {j_value} (docId={doc_id})"
+            )
+
+        # Step 4: Extract content.xml from ZIP
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            return zf.read("content.xml")
+
+    finally:
+        client.close()
+
+
 def fetch_one(
     url: str,
     client: httpx.Client | None = None,
@@ -148,13 +280,17 @@ def fetch_one(
             fetch_url = url
             headers = {}
 
-        response = client.get(fetch_url, headers=headers)
-        response.raise_for_status()
-        raw_data = response.content
+        # BSBE: uses own HTTP/2 client with session setup — skip shared client GET
+        if source_type == BSBE:
+            raw_data = _fetch_bsbe(url)
+        else:
+            response = client.get(fetch_url, headers=headers)
+            response.raise_for_status()
+            raw_data = response.content
 
-        # GII: unzip to get XML
-        if source_type == GII:
-            raw_data = _extract_zip_xml(raw_data)
+            # GII: unzip to get XML
+            if source_type == GII:
+                raw_data = _extract_zip_xml(raw_data)
 
         # Save to cache if requested (after unzip, before parse)
         if cache_dir is not None:
