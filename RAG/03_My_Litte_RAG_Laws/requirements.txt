@@ -1,5 +1,6 @@
 # Core dependencies for MCP server
-mcp>=1.0.0
+# Pin <2: MCP 2.0 renamed FastMCP import path (mcp.server.fastmcp → mcp.server.fastmcp2)
+mcp>=1.0.0,<2.0.0
 
 # ASGI server (runs the MCP streamable HTTP app)
 uvicorn>=0.20.0
