@@ -32,6 +32,7 @@ except ImportError:
     BeautifulSoup = None
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -47,6 +48,23 @@ PAGE_MAX_CONTENT_LENGTH = int(os.getenv("PAGE_MAX_CONTENT_LENGTH", "50000"))
 
 MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.getenv("MCP_PORT", "9200"))
+
+# Allowed Host header values for FastMCP's DNS-rebinding protection
+# (Starlette TrustedHostMiddleware-equivalent). "*" disables protection and
+# allows any host; otherwise a comma-separated list of allowed host values.
+# Each entry may use a ":*" suffix as a port wildcard, e.g. "192.168.0.209:*".
+_allowed_hosts_raw = os.getenv("ALLOWED_HOSTS", "*").strip()
+if _allowed_hosts_raw == "*":
+    # Disable host validation entirely (server reachable from any host).
+    _transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False
+    )
+else:
+    _allowed_hosts = [h.strip() for h in _allowed_hosts_raw.split(",") if h.strip()]
+    _transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_allowed_hosts,
+    )
 
 # Common browser headers for fetching
 _HEADERS = [
@@ -298,6 +316,7 @@ async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH, inclu
 mcp = FastMCP(
     "websearch",
     json_response=True,  # Use JSON responses instead of SSE where possible
+    transport_security=_transport_security,  # host validation (ALLOWED_HOSTS)
 )
 
 
