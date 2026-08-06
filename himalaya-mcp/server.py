@@ -12,6 +12,7 @@ import sys
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 HIMALAYA_BIN = os.getenv("HIMALAYA_BIN", "himalaya")
 HIMALAYA_CONFIG_DIR = os.getenv("HIMALAYA_CONFIG_DIR", "/config")
@@ -30,6 +31,17 @@ DRAFTS_FOLDER = os.getenv("DRAFTS_FOLDER", "Drafts")
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", "9201"))
+
+# Allowed Host header values for FastMCP's DNS-rebinding protection
+# (Starlette TrustedHostMiddleware-equivalent). "*" disables protection and
+# allows any host; otherwise a comma-separated list of allowed host values.
+# Each entry may use a ":*" suffix as a port wildcard, e.g. "192.168.0.209:*".
+_allowed_hosts_raw = os.getenv("ALLOWED_HOSTS", "*").strip()
+if _allowed_hosts_raw == "*":
+    _transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+else:
+    _allowed_hosts = [h.strip() for h in _allowed_hosts_raw.split(",") if h.strip()]
+    _transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=_allowed_hosts)
 
 
 def _acc(account: Optional[str]) -> list:
@@ -71,7 +83,7 @@ def _validate_config_path() -> None:
 
 _validate_config_path()
 
-mcp = FastMCP("himalaya", json_response=True)
+mcp = FastMCP("himalaya", json_response=True, transport_security=_transport_security)
 
 
 async def _himalaya(*args) -> dict:
