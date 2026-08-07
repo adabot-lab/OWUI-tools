@@ -105,26 +105,6 @@ async def _himalaya(*args) -> dict:
         return {"raw": stdout.decode().strip()}
 
 
-async def _himalaya_stdin(args: list, stdin_data: str) -> dict:
-    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_FILE,
-           "--output", "json", "--quiet"] + args
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(input=stdin_data.encode()), timeout=30)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return {"error": "himalaya command timed out after 30 seconds", "returncode": -1}
-    if proc.returncode != 0:
-        return {"error": stderr.decode().strip(), "returncode": proc.returncode}
-    try:
-        return json.loads(stdout.decode())
-    except json.JSONDecodeError:
-        return {"raw": stdout.decode().strip()}
-
-
 @mcp.tool()
 async def folder_list(account: Optional[str] = None) -> str:
     """List all mailboxes/folders for the account."""
@@ -256,9 +236,18 @@ async def template_save(
     account: Optional[str] = None,
 ) -> str:
     """Compile MML and save to Drafts folder via IMAP APPEND.
-    Does NOT send via SMTP — SMTP is not configured in this container."""
+    Does NOT send via SMTP — SMTP is not configured in this container.
+
+    Implementation note: himalaya v1.2.0's `template save` chooses its input
+    source via `if is_tty || is_json` (save.rs:68-79). Because this server
+    always runs himalaya with `--output json`, is_json is true and himalaya
+    reads the MML from the trailing positional `TEMPLATE` argument — NOT from
+    stdin. Piping MML to stdin (the previous _himalaya_stdin approach) is
+    silently ignored, an empty template is compiled, and the compiler errors
+    with "cannot parse template". The MML MUST be passed as a positional arg.
+    """
     fld = folder or DRAFTS_FOLDER
-    result = await _himalaya_stdin(["template", "save", *_acc(account), "-f", fld], mml)
+    result = await _himalaya("template", "save", *_acc(account), "-f", fld, mml)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
