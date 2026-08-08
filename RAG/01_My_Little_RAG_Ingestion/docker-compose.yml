@@ -9,8 +9,8 @@ services:
 
     entrypoint: >
       bash -c "
-        echo 'Running ingest_index.py with provider: ${PROVIDER:-openai}...';
-        PROVIDER=${PROVIDER:-openai} python ingest_index.py;
+        echo 'Running main.py with provider: ${PROVIDER:-openai}...';
+        PROVIDER=${PROVIDER:-openai} python main.py;
         echo 'Ingestion complete. Container will now exit.';
         exit 0
       "

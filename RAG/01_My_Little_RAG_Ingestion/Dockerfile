@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code
 # Changes here won't trigger a reinstall of dependencies
-COPY ingest_index.py ./
+COPY *.py ./
 
 # Set environment variable to disable Python output buffering
 ENV PYTHONUNBUFFERED=1
