@@ -252,6 +252,19 @@ async def template_save(
 
 
 @mcp.tool()
+async def draft_delete(
+    id: str,
+    account: Optional[str] = None,
+) -> str:
+    """Delete a draft from the Drafts folder.
+    Drafts folder only — cannot delete messages from other folders.
+    Uses himalaya message delete with folder hardcoded to DRAFTS_FOLDER."""
+    result = await _himalaya(
+        "message", "delete", *_acc(account), "-f", DRAFTS_FOLDER, id)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
 async def flag_set(
     id: str,
     flag: str,
@@ -286,7 +299,7 @@ async def health_check() -> str:
             "folder_list", "envelope_list", "message_read",
             "message_export", "attachment_download", "template_write",
             "template_reply", "template_forward", "template_save",
-            "flag_set", "health_check",
+            "draft_delete", "flag_set", "health_check",
         ],
         "send_capability": False,
     }

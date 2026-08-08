@@ -1,6 +1,6 @@
 # himalaya-mcp
 
-Read + draft-only email MCP server via Streamable HTTP transport. Wraps the [himalaya](https://github.com/pimalaya/himalaya) CLI v1.2.0 in a Docker container, exposing 11 tools with **zero send/delete/move capability**.
+Read + draft-only email MCP server via Streamable HTTP transport. Wraps the [himalaya](https://github.com/pimalaya/himalaya) CLI v1.2.0 in a Docker container, exposing 12 tools with **zero send/move capability, draft-only delete**.
 
 ## What it does
 
@@ -16,7 +16,7 @@ Built for automated/cron workflows where failed LLM processing must leave mail u
 
 Three independent layers ensure no email can ever be sent:
 
-1. **Code-level**: No `message_send`, `template_send`, `message_delete`, `message_move`, `folder_delete`, or `account_configure` tool exists in `server.py`. Not commented out, not behind a flag — absent.
+1. **Code-level**: No `message_send`, `template_send`, `message_move`, `folder_delete`, or `account_configure` tool exists in `server.py`. Not commented out, not behind a flag — absent. The `draft_delete` tool exists but is hardcoded to the Drafts folder (DRAFTS_FOLDER env var) — it cannot target other folders.
 
 2. **Config-level**: Mounted `config.toml` omits any SMTP/backend section entirely. Himalaya has no send backend configured — it literally cannot send even if a tool tried.
 
@@ -24,7 +24,7 @@ Three independent layers ensure no email can ever be sent:
 
 The `health_check` tool confirms `send_capability: false` at runtime.
 
-## Tools (11 total)
+## Tools (12 total)
 
 ### Read tools
 
@@ -86,6 +86,11 @@ Compile an MML template and save it to the Drafts folder via IMAP APPEND. Does N
 - `folder` (str, optional): Target folder. Defaults to `DRAFTS_FOLDER`.
 - `account` (str, optional): Account name.
 
+#### `draft_delete(id, account?)`
+Delete a draft from the Drafts folder. Drafts folder only — cannot delete messages from other folders. The folder is hardcoded to DRAFTS_FOLDER and not exposed as a parameter.
+- `id` (str): Message ID of the draft to delete.
+- `account` (str, optional): Account name.
+
 ### Flag tools
 
 #### `flag_set(id, flag, add?, folder?, account?)`
@@ -108,7 +113,7 @@ Example output:
   "server": "himalaya-mcp",
   "mode": "draft-only (no send capability)",
   "send_capability": false,
-  "tools_registered": ["folder_list", "envelope_list", "...11 tools..."]
+  "tools_registered": ["folder_list", "envelope_list", "...12 tools..."]
 }
 ```
 
@@ -225,7 +230,7 @@ mcp_servers:
 │  │  uvicorn     │   │  himalaya v1.2.0 │  │
 │  │  :9201       │──▶│  (static binary) │  │
 │  │  FastMCP     │   │  IMAP only       │  │
-│  │  11 tools    │   │  No SMTP config   │  │
+│  │  12 tools    │   │  No SMTP config   │  │
 │  └─────────────┘   └────────┬────────┘  │
 │                             │            │
 │  ┌─────────────┐   ┌────────▼────────┐  │
@@ -247,7 +252,7 @@ mcp_servers:
 
 ```
 himalaya-mcp/
-├── server.py              # FastMCP server — 11 tools, ~250 lines
+├── server.py              # FastMCP server — 12 tools
 ├── Dockerfile             # python:3.13-slim + himalaya v1.2.0 static binary
 ├── docker-compose.yml     # port 9201, owui-tools network, config/data volumes
 ├── .env.example           # environment variable template
@@ -262,7 +267,6 @@ himalaya-mcp/
 These do NOT exist in the codebase — not registered, not commented out, not behind a flag:
 
 - `message_send` / `template_send` (SMTP delivery)
-- `message_delete`
 - `message_move` (to Trash or elsewhere)
 - `folder_delete` / `folder_purge` / `folder_expunge`
 - `account_configure`
