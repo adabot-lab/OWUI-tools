@@ -4,7 +4,6 @@ include:
   # litellm
   - path: ./litellm/docker-compose.yml
   # web search
-  - path: ./websearch/docker-compose.yml
   - path: ./websearch-mcp/docker-compose.yml
   # RAG
   - path: ./RAG/02_My_Little_RAG/docker-compose.yml
