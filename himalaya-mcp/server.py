@@ -107,26 +107,6 @@ async def _himalaya(*args) -> dict:
         return {"raw": stdout.decode().strip()}
 
 
-async def _himalaya_stdin(data: bytes, *args) -> dict:
-    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_FILE,
-           "--output", "json", "--quiet"] + list(args)
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(data), timeout=30)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return {"error": "himalaya command timed out after 30 seconds", "returncode": -1}
-    if proc.returncode != 0:
-        return {"error": stderr.decode().strip(), "returncode": proc.returncode}
-    try:
-        return json.loads(stdout.decode())
-    except json.JSONDecodeError:
-        return {"raw": stdout.decode().strip()}
-
-
 @mcp.tool()
 async def folder_list(account: Optional[str] = None) -> str:
     """List all mailboxes/folders for the account."""
@@ -298,12 +278,16 @@ async def template_save(
     duplicate-draft bug (upstream issue #663), where the MML compiler calls
     add_message twice and creates two identical drafts. Instead, the MML is
     compiled to MIME in Python (via the email standard library) and the raw
-    message is handed to `himalaya message save` through stdin, which is not
-    affected by the bug.
+    message is passed as a positional argument to `himalaya message save`,
+    which is not affected by the bug.
+
+    Note: himalaya's `message save` ignores stdin when --output json is set
+    (in JSON mode it reads the message from the positional arg), so the MIME
+    MUST be passed as a positional argument, not piped via stdin.
     """
     fld = folder or DRAFTS_FOLDER
-    mime = _mml_to_mime(mml)
-    result = await _himalaya_stdin(mime, "message", "save", *_acc(account), "-f", fld)
+    mime = _mml_to_mime(mml).decode()
+    result = await _himalaya("message", "save", *_acc(account), "-f", fld, mime)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
