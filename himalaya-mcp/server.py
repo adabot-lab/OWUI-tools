@@ -9,6 +9,8 @@ import asyncio
 import json
 import os
 import sys
+import email.message
+import email.utils
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -93,6 +95,26 @@ async def _himalaya(*args) -> dict:
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"error": "himalaya command timed out after 30 seconds", "returncode": -1}
+    if proc.returncode != 0:
+        return {"error": stderr.decode().strip(), "returncode": proc.returncode}
+    try:
+        return json.loads(stdout.decode())
+    except json.JSONDecodeError:
+        return {"raw": stdout.decode().strip()}
+
+
+async def _himalaya_stdin(data: bytes, *args) -> dict:
+    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_FILE,
+           "--output", "json", "--quiet"] + list(args)
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(data), timeout=30)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
@@ -229,6 +251,40 @@ async def template_forward(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
+def _mml_to_mime(mml: str) -> bytes:
+    """Compile an MML (Markdown Mail) string into raw MIME bytes.
+
+    MML format: optional "Key: Value" header lines, then ONE blank line,
+    then the body. The body is treated as plain text (utf-8) — no markdown
+    detection or conversion is performed.
+    """
+    if "\n\n" in mml:
+        headers_block, body = mml.split("\n\n", 1)
+    else:
+        headers_block, body = "", mml
+
+    msg = email.message.EmailMessage()
+    for line in headers_block.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            key = key.strip()
+            value = value.strip()
+            if key:
+                msg[key] = value
+
+    msg.set_content(body)
+
+    if "Message-ID" not in msg:
+        msg["Message-ID"] = email.utils.make_msgid()
+    if "Date" not in msg:
+        msg["Date"] = email.utils.formatdate(localtime=True)
+
+    return bytes(msg)
+
+
 @mcp.tool()
 async def template_save(
     mml: str,
@@ -238,16 +294,16 @@ async def template_save(
     """Compile MML and save to Drafts folder via IMAP APPEND.
     Does NOT send via SMTP — SMTP is not configured in this container.
 
-    Implementation note: himalaya v1.2.0's `template save` chooses its input
-    source via `if is_tty || is_json` (save.rs:68-79). Because this server
-    always runs himalaya with `--output json`, is_json is true and himalaya
-    reads the MML from the trailing positional `TEMPLATE` argument — NOT from
-    stdin. Piping MML to stdin (the previous _himalaya_stdin approach) is
-    silently ignored, an empty template is compiled, and the compiler errors
-    with "cannot parse template". The MML MUST be passed as a positional arg.
+    Implementation note: this bypasses himalaya v1.2.0's `template save`
+    duplicate-draft bug (upstream issue #663), where the MML compiler calls
+    add_message twice and creates two identical drafts. Instead, the MML is
+    compiled to MIME in Python (via the email standard library) and the raw
+    message is handed to `himalaya message save` through stdin, which is not
+    affected by the bug.
     """
     fld = folder or DRAFTS_FOLDER
-    result = await _himalaya("template", "save", *_acc(account), "-f", fld, mml)
+    mime = _mml_to_mime(mml)
+    result = await _himalaya_stdin(mime, "message", "save", *_acc(account), "-f", fld)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
