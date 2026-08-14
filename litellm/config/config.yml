@@ -79,6 +79,19 @@ model_list:
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
       drop_params: true
+      input_cost_per_token: 0.0000014        # $1.40 / 1M
+      output_cost_per_token: 0.0000044       # $4.40 / 1M
+      cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached input
+
+  - model_name: zai-glm-5.3
+    litellm_params:
+      model: zai/glm-5.3
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      input_cost_per_token: 0.0000014        # $1.40 / 1M
+      output_cost_per_token: 0.0000044       # $4.40 / 1M
+      cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached input
   # ==================== OPENROUTER ====================
 
   - model_name: flux-openrouter
