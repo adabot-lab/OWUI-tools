@@ -11,6 +11,7 @@ services:
       - HIMALAYA_CONFIG_DIR=/config
       - DEFAULT_ACCOUNT=${DEFAULT_ACCOUNT:-}
       - DRAFTS_FOLDER=${DRAFTS_FOLDER:-Drafts}
+      - TRASH_FOLDER=${TRASH_FOLDER:-Trash}
       - DATA_DIR=/data
     volumes:
       - ./config:/config:ro

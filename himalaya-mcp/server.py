@@ -1,7 +1,7 @@
 """
 Himalaya MCP Server — Streamable HTTP Transport (Draft-Only)
 =============================================================
-Read + draft email via himalaya CLI. NO send capability.
+Read + draft email via the himalaya v2.0.0 CLI. NO send capability.
 SMTP deliberately absent from config — structural enforcement.
 """
 
@@ -30,6 +30,7 @@ HIMALAYA_CONFIG_FILE = os.getenv("HIMALAYA_CONFIG_FILE") or os.path.join(
 # and himalaya resolves the account itself (the one with `default = true`).
 DEFAULT_ACCOUNT = os.getenv("DEFAULT_ACCOUNT", "")
 DRAFTS_FOLDER = os.getenv("DRAFTS_FOLDER", "Drafts")
+TRASH_FOLDER = os.getenv("TRASH_FOLDER", "Trash")
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", "9201"))
@@ -88,29 +89,72 @@ _validate_config_path()
 mcp = FastMCP("himalaya", json_response=True, transport_security=_transport_security)
 
 
-async def _himalaya(*args) -> dict:
-    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_FILE,
-           "--output", "json", "--quiet"] + list(args)
+async def _run(*args, stdin_data: Optional[str] = None, as_json: bool = True) -> dict:
+    """Run himalaya once; return parsed JSON (as_json=True) or raw stdout.
+
+    v2 uses --json (not --output json) and has no --quiet. Global flags go
+    before subcommand args. In --json mode v2 prints errors as a JSON object
+    on STDOUT with rc=1 (stderr stays empty).
+    """
+    cmd = [HIMALAYA_BIN, "--config", HIMALAYA_CONFIG_FILE]
+    if as_json:
+        cmd.append("--json")
+    cmd.extend(args)
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        *cmd,
+        stdin=asyncio.subprocess.PIPE if stdin_data is not None else asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE)
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(
+                stdin_data.encode("utf-8") if stdin_data is not None else None),
+            timeout=30)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
         return {"error": "himalaya command timed out after 30 seconds", "returncode": -1}
     if proc.returncode != 0:
-        return {"error": stderr.decode().strip(), "returncode": proc.returncode}
+        if as_json:
+            try:
+                parsed = json.loads(stdout.decode())
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict) and "error" in parsed:
+                return {**parsed, "returncode": proc.returncode}
+        return {"error": (stderr or stdout).decode().strip(), "returncode": proc.returncode}
+    if not as_json:
+        return {"raw": stdout.decode(errors="replace")}
     try:
-        return json.loads(stdout.decode())
+        result = json.loads(stdout.decode())
     except json.JSONDecodeError:
         return {"raw": stdout.decode().strip()}
+    # Backwards-compat unwrap for v1 bare-array responses: a dict with exactly
+    # one key whose value is a list (e.g. {"mailboxes": [...]}) becomes the list.
+    if isinstance(result, dict) and len(result) == 1:
+        value = next(iter(result.values()))
+        if isinstance(value, list):
+            return value
+    return result
+
+
+async def _himalaya(*args, stdin_data: Optional[str] = None) -> dict:
+    """Run himalaya with --json and unwrap single-key list wrappers."""
+    return await _run(*args, stdin_data=stdin_data, as_json=True)
+
+
+async def _himalaya_raw(*args) -> dict:
+    """Run himalaya WITHOUT --json, returning {"raw": stdout}.
+    Used only by message_export (`message read --raw`). --raw and --json are
+    mutually exclusive in v2.
+    """
+    return await _run(*args, as_json=False)
 
 
 @mcp.tool()
 async def folder_list(account: Optional[str] = None) -> str:
     """List all mailboxes/folders for the account."""
-    result = await _himalaya("folder", "list", *_acc(account))
+    result = await _himalaya("mailbox", "list", *_acc(account))
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -124,11 +168,14 @@ async def envelope_list(
 ) -> str:
     """List message envelopes with optional filter query.
     Query examples: 'not flag seen', 'from sender@example.com',
-    'subject invoice', 'before 2026-01-01'."""
-    args = ["envelope", "list", *_acc(account), "-f", folder]
-    args.extend(["--page", str(page), "--page-size", str(page_size)])
+    'subject invoice', 'before 2026-01-01'.
+    When a query is given this routes to himalaya `envelope search` (v2
+    `envelope list` has no query positional)."""
+    common = ["-m", folder, "-p", str(page), "-s", str(page_size)]
     if query:
-        args.append(query)
+        args = ["envelope", "search", *_acc(account), *common, "--", *query.split()]
+    else:
+        args = ["envelope", "list", *_acc(account), *common]
     result = await _himalaya(*args)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -140,12 +187,17 @@ async def message_read(
     folder: str = "INBOX",
     account: Optional[str] = None,
 ) -> str:
-    """Read message body. Defaults to peek=true (does NOT mark as read).
-    Set peek=false to mark as read after reading."""
-    args = ["message", "read", *_acc(account), "-f", folder, id]
-    if peek:
-        args.append("--preview")
-    result = await _himalaya(*args)
+    """Read message body. Defaults to peek=true (does NOT mark as read —
+    v2 read uses IMAP BODY.PEEK internally and never sets \\Seen).
+    Set peek=false to add \\Seen afterwards."""
+    result = await _himalaya("message", "read", *_acc(account), "-m", folder, "--", id)
+    if "error" in result:
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    if not peek:
+        flagged = await _himalaya(
+            "flag", "add", *_acc(account), "-m", folder, "-f", "seen", "--", id)
+        if "error" in flagged:
+            result["warn"] = f"flag add seen failed: {flagged['error']}"
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -157,37 +209,22 @@ async def message_export(
     account: Optional[str] = None,
 ) -> str:
     """Export raw MIME (for ICS/calendar parsing). Defaults to peek=true.
-    Since message export has no --preview flag, peek is achieved by immediately removing \\Seen flag after export.
-    NOTE: This is NOT atomic — between export (which marks \\Seen) and flag removal, the message briefly appears as read. This is a known race condition with no better workaround in the himalaya CLI.
-    Exports to a temp dir, reads back the .eml content, cleans up."""
-    import tempfile, glob, os
-    tmpdir = tempfile.mkdtemp(prefix="himalaya_export_")
-    result = await _himalaya(
-        "message", "export", *_acc(account), "-f", folder,
-        "-d", tmpdir, id, "--full")
-    # Find the exported .eml file
-    eml_files = glob.glob(os.path.join(tmpdir, "*.eml"))
-    raw_mime = ""
-    if eml_files:
-        with open(eml_files[0], "r", errors="replace") as f:
-            raw_mime = f.read()
-        # Clean up temp files
-        for fp in eml_files:
-            try:
-                os.remove(fp)
-            except OSError:
-                pass
-    try:
-        os.rmdir(tmpdir)
-    except OSError:
-        pass
-    # Undo auto-Seen from export (before return)
-    if peek and "error" not in result:
-        await _himalaya("flag", "remove", *_acc(account), "-f", folder, id, "seen")
-    output = result if "error" in result else {
-        "id": id, "folder": folder,
-        "raw_mime": raw_mime, "mime_length": len(raw_mime),
-    }
+    Uses `message read --raw` (RFC 5322 MIME on stdout). v2 read uses IMAP
+    BODY.PEEK internally, so this is peek-safe by design — it never sets
+    \\Seen and needs no race-condition workaround.
+    Set peek=false to add \\Seen afterwards."""
+    result = await _himalaya_raw(
+        "message", "read", *_acc(account), "-m", folder, "--raw", "--", id)
+    if "error" in result:
+        output = result
+    else:
+        raw = result["raw"]
+        output = {"id": id, "folder": folder, "raw_mime": raw, "mime_length": len(raw)}
+        if not peek:
+            flagged = await _himalaya(
+                "flag", "add", *_acc(account), "-m", folder, "-f", "seen", "--", id)
+            if "error" in flagged:
+                output["warn"] = f"flag add seen failed: {flagged['error']}"
     return json.dumps(output, ensure_ascii=False, indent=2)
 
 
@@ -198,14 +235,14 @@ async def attachment_download(
     account: Optional[str] = None,
 ) -> str:
     """Download all attachments for a message to the data directory."""
-    result = await _himalaya("attachment", "download", *_acc(account), "-f", folder, "-d", DATA_DIR, id)
+    result = await _himalaya("attachment", "download", *_acc(account), "-m", folder, "-d", DATA_DIR, "--", id)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 async def template_write(account: Optional[str] = None) -> str:
-    """Generate a blank MML (Markdown Mail) template for composing."""
-    result = await _himalaya("template", "write", *_acc(account))
+    """Generate a blank MIME (RFC 5322) skeleton for composing."""
+    result = await _himalaya("message", "compose", *_acc(account))
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -215,8 +252,8 @@ async def template_reply(
     folder: str = "INBOX",
     account: Optional[str] = None,
 ) -> str:
-    """Generate a reply MML template for the given message."""
-    result = await _himalaya("template", "reply", *_acc(account), "-f", folder, id)
+    """Generate a reply MIME skeleton pre-filled from the given message."""
+    result = await _himalaya("message", "reply", *_acc(account), "-m", folder, "--", id)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -226,8 +263,8 @@ async def template_forward(
     folder: str = "INBOX",
     account: Optional[str] = None,
 ) -> str:
-    """Generate a forward MML template for the given message."""
-    result = await _himalaya("template", "forward", *_acc(account), "-f", folder, id)
+    """Generate a forward MIME skeleton pre-filled from the given message."""
+    result = await _himalaya("message", "forward", *_acc(account), "-m", folder, "--", id)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -271,23 +308,23 @@ async def template_save(
     folder: Optional[str] = None,
     account: Optional[str] = None,
 ) -> str:
-    """Compile MML and save to Drafts folder via IMAP APPEND.
-    Does NOT send via SMTP — SMTP is not configured in this container.
+    """Save a message draft via IMAP APPEND. Does NOT send via SMTP.
+    Input is the edited MIME from template_write/reply/forward; simple
+    "Key: Value\n\n body" text is still compiled to MIME in Python.
 
-    Implementation note: this bypasses himalaya v1.2.0's `template save`
-    duplicate-draft bug (upstream issue #663), where the MML compiler calls
-    add_message twice and creates two identical drafts. Instead, the MML is
-    compiled to MIME in Python (via the email standard library) and the raw
-    message is passed as a positional argument to `himalaya message save`,
-    which is not affected by the bug.
-
-    Note: himalaya's `message save` ignores stdin when --output json is set
-    (in JSON mode it reads the message from the positional arg), so the MIME
-    MUST be passed as a positional argument, not piped via stdin.
+    Implementation note: v2 `message add` takes raw MIME via STDIN, so we
+    pipe it in (avoids argv size limits and `--` ordering issues). Input that
+    already looks like MIME ("MIME-Version:" or "Content-Type:" present)
+    passes through unchanged; other input is compiled with _mml_to_mime().
+    Note: this does NOT send — `message add` is a pure IMAP APPEND. The v2
+    --send flag exists but we never pass it (SMTP is not configured).
     """
     fld = folder or DRAFTS_FOLDER
-    mime = _mml_to_mime(mml).decode()
-    result = await _himalaya("message", "save", *_acc(account), "-f", fld, mime)
+    if "MIME-Version:" in mml or "Content-Type:" in mml:
+        mime = mml
+    else:
+        mime = _mml_to_mime(mml).decode()
+    result = await _himalaya("message", "add", *_acc(account), "-m", fld, stdin_data=mime)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -296,11 +333,11 @@ async def draft_delete(
     id: str,
     account: Optional[str] = None,
 ) -> str:
-    """Delete a draft from the Drafts folder.
-    Drafts folder only — cannot delete messages from other folders.
-    Uses himalaya message delete with folder hardcoded to DRAFTS_FOLDER."""
+    """Delete a draft from the Drafts folder by moving it to the Trash folder
+    (recoverable). Drafts folder only — cannot delete messages from other
+    folders. Uses himalaya `message move` (v2 has no `message delete`)."""
     result = await _himalaya(
-        "message", "delete", *_acc(account), "-f", DRAFTS_FOLDER, id)
+        "message", "move", *_acc(account), "-f", DRAFTS_FOLDER, "-t", TRASH_FOLDER, "--", id)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -316,7 +353,7 @@ async def flag_set(
     Common flags: 'seen' (\\Seen), 'flagged' (\\Flagged), 'answered' (\\Answered).
     Use add=false to remove the flag."""
     action = "add" if add else "remove"
-    result = await _himalaya("flag", action, *_acc(account), "-f", folder, id, flag)
+    result = await _himalaya("flag", action, *_acc(account), "-m", folder, "-f", flag, "--", id)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -333,6 +370,7 @@ async def health_check() -> str:
             "HIMALAYA_CONFIG_FILE": HIMALAYA_CONFIG_FILE,
             "DEFAULT_ACCOUNT": DEFAULT_ACCOUNT or "(himalaya default)",
             "DRAFTS_FOLDER": DRAFTS_FOLDER,
+            "TRASH_FOLDER": TRASH_FOLDER,
             "DATA_DIR": DATA_DIR,
         },
         "tools_registered": [
