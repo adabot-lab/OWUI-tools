@@ -53,18 +53,27 @@ model_list:
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
       drop_params: true
+      input_cost_per_token: 6e-07
+      output_cost_per_token: 2.2e-06
+      cache_read_input_token_cost: 1.1e-07
 
   - model_name: zai-glm-5
     litellm_params:
       model: zai/glm-5
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
+      input_cost_per_token: 1e-06
+      output_cost_per_token: 3.2e-06
+      cache_read_input_token_cost: 2e-07
 
   - model_name: zai-glm-5-turbo
     litellm_params:
       model: zai/glm-5-turbo
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
+      input_cost_per_token: 1.2e-06
+      output_cost_per_token: 4e-06
+      cache_read_input_token_cost: 2.4e-07
 
   - model_name: zai-glm-5.1
     litellm_params:
@@ -72,6 +81,9 @@ model_list:
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
       drop_params: true
+      input_cost_per_token: 1.4e-06
+      output_cost_per_token: 4.4e-06
+      cache_read_input_token_cost: 2.6e-07
 
   - model_name: zai-glm-5.2
     litellm_params:
