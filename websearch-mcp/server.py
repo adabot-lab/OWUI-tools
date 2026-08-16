@@ -80,6 +80,12 @@ _HEADERS = [
     },
 ]
 
+_FETCH_ATTEMPTS = [  # (index into _HEADERS, timeout_extra seconds)
+    (0, 0),   # primary UA, base timeout
+    (0, 5),   # primary UA, +5 s — slow host
+    (1, 10),  # fallback UA, +10 s — UA-blocked and/or slow
+]
+
 
 # ── Search: SearXNG ──────────────────────────────────────────────────────────
 
@@ -241,17 +247,17 @@ async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH, inclu
     last_error = None
     fatal_error = False
 
-    for headers in _HEADERS:
-        for timeout_extra in (0, 5, 10):
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        for headers_idx, timeout_extra in _FETCH_ATTEMPTS:
             try:
-                async with httpx.AsyncClient(
+                resp = await client.get(
+                    url,
+                    headers=_HEADERS[headers_idx],
                     timeout=PAGE_FETCH_TIMEOUT + timeout_extra,
-                    follow_redirects=True,
-                ) as client:
-                    resp = await client.get(url, headers=headers)
-                    resp.raise_for_status()
-                    html = resp.text
-                    break
+                )
+                resp.raise_for_status()
+                html = resp.text
+                break
             except httpx.TimeoutException:
                 continue
             except httpx.HTTPStatusError as e:
@@ -262,8 +268,6 @@ async def _fetch_page(url: str, max_length: int = PAGE_MAX_CONTENT_LENGTH, inclu
                 break
             except httpx.RequestError:
                 continue
-        if html or fatal_error:
-            break
 
     if html is None:
         return {
