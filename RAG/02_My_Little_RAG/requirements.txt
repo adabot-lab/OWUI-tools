@@ -1,6 +1,6 @@
 # Core dependencies for retrieval API
 qdrant-client>=1.9.0
-mcp>=1.0.0
+mcp>=1.0.0,<2.0.0
 
 # Web framework
 fastapi>=0.100.0
