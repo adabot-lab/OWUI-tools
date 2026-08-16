@@ -1,9 +1,15 @@
-"""Parser for EUR-Lex ELI-annotated XHTML from the CELLAR API.
+"""Parser for EUR-Lex XHTML from the CELLAR API.
 
 Handles the XHTML format published at publications.europa.eu for EU directives
-(e.g. 2014/24/EU). The document is ELI-annotated: each article lives in a
-``<div class="eli-subdivision" id="art_N">`` and carries a title via
-``<p class="title-article-norm">`` / ``<p class="stitle-article-norm">``.
+and regulations in two flavours:
+
+- ELI format (consolidated docs): each article lives in a
+  ``<div class="eli-subdivision" id="art_N">`` and carries a title via
+  ``<p class="title-article-norm">`` / ``<p class="stitle-article-norm">``.
+- OJ format (original OJ publications): law title from ``p.oj-doc-ti`` inside
+  ``div.eli-main-title``, article heading/subtitle from ``p.oj-ti-art`` /
+  ``p.oj-sti-art``, body from ``p.oj-normal`` (incl. table cells). No
+  ``p.reference`` element is present.
 """
 from __future__ import annotations
 
@@ -22,20 +28,45 @@ _DATE_RE = re.compile(r"—\s*[A-Z]{2}\s*—\s*(\d{2}\.\d{2}\.\d{4})")
 _DIRECTIVE_RE = re.compile(r"(\d{4})/(\d+)/EU")
 # Extract the trailing integer from "Artikel 1" / "Article 94".
 _ARTICLE_NUM_RE = re.compile(r"\d+")
+# German month names used in OJ "vom <day>. <Month> <year>" date lines.
+_GERMAN_MONTHS = {
+    "Januar": "01", "Februar": "02", "März": "03", "April": "04",
+    "Mai": "05", "Juni": "06", "Juli": "07", "August": "08",
+    "September": "09", "Oktober": "10", "November": "11", "Dezember": "12",
+}
+# Date line in OJ docs, e.g. "vom 14. März 2012".
+_GERMAN_DATE_RE = re.compile(r"\bvom\s+(\d{1,2})\.\s*([A-Za-zäöüÄÖÜ]+)\s+(\d{4})")
 
 # CSS selectors for elements that should be stripped before text extraction.
 _STRIP_SELECTORS = ("p.modref", "a.modref", ".footnote", ".note")
 
 
+def _parse_german_date(text: str) -> str:
+    """Normalize a German date string like "vom 14. März 2012" to ISO.
+
+    Returns ``""`` when no parseable date is found.
+    """
+    m = _GERMAN_DATE_RE.search(text)
+    if m is None:
+        return ""
+    month = _GERMAN_MONTHS.get(m.group(2))
+    if month is None:
+        return ""
+    return f"{m.group(3)}-{month}-{int(m.group(1)):02d}"
+
+
 class EurlexHtmlParser(BaseParser):
-    """Parse EUR-Lex ELI XHTML into a :class:`LawDocument`."""
+    """Parse EUR-Lex ELI/OJ XHTML into a :class:`LawDocument`."""
 
     def parse(self, raw_data: bytes | str, source_url: str = "") -> LawDocument:
         markup = raw_data.decode("utf-8") if isinstance(raw_data, bytes) else raw_data
         soup = BeautifulSoup(markup, "lxml")
 
-        law_name = self._extract_law_name(soup)
-        abbreviation, stand_date = self._extract_reference(soup)
+        # OJ format iff a law title appears inside div.eli-main-title.
+        oj_format = soup.select_one("div.eli-main-title p.oj-doc-ti") is not None
+
+        law_name = self._extract_law_name(soup, oj_format)
+        abbreviation, stand_date = self._extract_reference(soup, oj_format)
 
         paragraphs: list[Paragraph] = []
         seen_numbers: set[str] = set()
@@ -44,7 +75,7 @@ class EurlexHtmlParser(BaseParser):
             # Skip chapter/section containers (ids starting with "enc_").
             if not art_id.startswith("art_"):
                 continue
-            paragraph = self._parse_article(art_div)
+            paragraph = self._parse_article(art_div, oj_format)
             if paragraph is None:
                 continue
             if paragraph.section_number in seen_numbers:
@@ -64,19 +95,36 @@ class EurlexHtmlParser(BaseParser):
     # Metadata extraction
     # ------------------------------------------------------------------
     @staticmethod
-    def _extract_law_name(soup: BeautifulSoup) -> str:
+    def _extract_law_name(soup: BeautifulSoup, oj_format: bool = False) -> str:
+        if oj_format:
+            nodes = soup.select("div.eli-main-title p.oj-doc-ti")
+            parts = [n.get_text(" ", strip=True) for n in nodes]
+            return " ".join(p for p in parts if p)
         node = soup.select_one("p.title-doc-first")
         return node.get_text(strip=True) if node is not None else ""
 
     @staticmethod
-    def _extract_reference(soup: BeautifulSoup) -> tuple[str, str]:
-        """Return ``(abbreviation, stand_date)`` from the CELEX reference line.
+    def _extract_reference(
+        soup: BeautifulSoup, oj_format: bool = False
+    ) -> tuple[str, str]:
+        """Return ``(abbreviation, stand_date)`` from the reference metadata.
 
-        Falls back to extracting the abbreviation from the law name when the
-        ``<p class="reference">`` element is absent (e.g. in trimmed fixtures).
+        For OJ docs there is no ``<p class="reference">`` element; the
+        stand_date is taken from the "vom <date>" line of the law title and
+        the abbreviation stays empty. Otherwise the abbreviation is derived
+        from the CELEX reference line (or the law name when the reference
+        element is absent, e.g. in trimmed fixtures).
         """
         abbreviation = ""
         stand_date = ""
+
+        if oj_format:
+            for node in soup.select("div.eli-main-title p.oj-doc-ti"):
+                text = node.get_text(" ", strip=True)
+                if text.startswith("vom "):
+                    stand_date = _parse_german_date(text)
+                    break
+            return abbreviation, stand_date
 
         ref_node = soup.select_one("p.reference")
         if ref_node is not None:
@@ -104,17 +152,20 @@ class EurlexHtmlParser(BaseParser):
     # ------------------------------------------------------------------
     # Article extraction
     # ------------------------------------------------------------------
-    def _parse_article(self, art_div: Tag) -> Paragraph | None:
-        section_number = self._extract_article_number(art_div)
-        title = self._extract_article_title(art_div)
+    def _parse_article(
+        self, art_div: Tag, oj_format: bool = False
+    ) -> Paragraph | None:
+        section_number = self._extract_article_number(art_div, oj_format)
+        title = self._extract_article_title(art_div, oj_format)
 
         # Strip modification references and footnotes in-place; each art_div
-        # is processed exactly once so mutation is safe.
+        # is processed exactly once so mutation is safe. For OJ docs these
+        # selectors match nothing (no modref/footnotes exist there).
         for selector in _STRIP_SELECTORS:
             for el in art_div.select(selector):
                 el.decompose()
 
-        content = self._extract_article_content(art_div)
+        content = self._extract_article_content(art_div, oj_format)
         if not content.strip():
             return None
 
@@ -126,8 +177,10 @@ class EurlexHtmlParser(BaseParser):
         )
 
     @staticmethod
-    def _extract_article_number(art_div: Tag) -> str:
+    def _extract_article_number(art_div: Tag, oj_format: bool = False) -> str:
         node = art_div.select_one("p.title-article-norm")
+        if oj_format:
+            node = art_div.select_one("p.oj-ti-art")
         if node is not None:
             m = _ARTICLE_NUM_RE.search(node.get_text(strip=True))
             if m:
@@ -137,19 +190,45 @@ class EurlexHtmlParser(BaseParser):
         return m.group(0) if m else ""
 
     @staticmethod
-    def _extract_article_title(art_div: Tag) -> str:
+    def _extract_article_title(art_div: Tag, oj_format: bool = False) -> str:
         node = art_div.select_one("p.stitle-article-norm")
+        if oj_format:
+            node = art_div.select_one("p.oj-sti-art")
         return node.get_text(strip=True) if node is not None else ""
 
     @staticmethod
-    def _extract_article_content(art_div: Tag) -> str:
+    def _extract_article_content(
+        art_div: Tag, oj_format: bool = False
+    ) -> str:
         """Build cleaned article text: heading + subtitle + body paragraphs.
 
-        Body text is collected from the *outermost* ``<div|p class="norm">``
-        elements — i.e. those not nested inside another ``norm`` element — so
-        that wrapper/child overlap does not duplicate text.
+        For OJ docs the body is the concatenation of all ``p.oj-normal``
+        elements (also inside table cells) in document order. For ELI docs
+        the body text is collected from the *outermost*
+        ``<div|p class="norm">`` elements — i.e. those not nested inside
+        another ``norm`` element — so that wrapper/child overlap does not
+        duplicate text.
         """
         parts: list[str] = []
+
+        if oj_format:
+            heading = art_div.select_one("p.oj-ti-art")
+            if heading is not None:
+                parts.append(heading.get_text(strip=True))
+
+            subtitle = art_div.select_one("p.oj-sti-art")
+            if subtitle is not None:
+                parts.append(subtitle.get_text(strip=True))
+
+            body_texts = [
+                p.get_text(" ", strip=True)
+                for p in art_div.select("p.oj-normal")
+                if p.get_text(" ", strip=True)
+            ]
+            if body_texts:
+                parts.append("\n".join(body_texts))
+
+            return "\n".join(parts)
 
         heading = art_div.select_one("p.title-article-norm")
         if heading is not None:

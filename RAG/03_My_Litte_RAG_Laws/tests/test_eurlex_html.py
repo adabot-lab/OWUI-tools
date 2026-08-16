@@ -70,3 +70,71 @@ def test_modref_markers_stripped():
     for p in doc.paragraphs:
         assert "▼" not in p.content
         assert "modref" not in p.content.lower()
+
+
+# ---------------------------------------------------------------------------
+# OJ-format documents (original OJ publications, e.g. VO (EU) 236/2012)
+# ---------------------------------------------------------------------------
+FIXTURE_OJ = Path(__file__).resolve().parent / "testdata" / "eurlex_oj_sample.xhtml"
+
+
+def _parse_oj():
+    raw = FIXTURE_OJ.read_text(encoding="utf-8")
+    return EurlexHtmlParser().parse(raw, source_url="https://eur-lex.example/32012R0236")
+
+
+def test_oj_law_name():
+    doc = _parse_oj()
+    assert "VERORDNUNG (EU) Nr. 236/2012" in doc.law_name
+    assert "Leerverkäufe" in doc.law_name
+    assert "vom 14. März 2012" in doc.law_name
+    assert "ANHANG" not in doc.law_name
+
+
+def test_oj_abbreviation_and_stand_date():
+    doc = _parse_oj()
+    assert doc.abbreviation == ""
+    assert doc.stand_date == "2012-03-14"
+
+
+def test_oj_paragraph_count():
+    doc = _parse_oj()
+    assert len(doc.paragraphs) == 3
+
+
+def test_oj_first_paragraph():
+    doc = _parse_oj()
+    p = doc.paragraphs[0]
+    assert p.section_number == "1"
+    assert p.section_type == "article"
+    assert p.title == "Anwendungsbereich"
+    assert p.content.startswith("Artikel 1")
+    assert "Finanzinstrumente" in p.content
+
+
+def test_oj_second_paragraph():
+    doc = _parse_oj()
+    p = doc.paragraphs[1]
+    assert p.section_number == "2"
+    assert p.title == "Begriffsbestimmungen"
+
+
+def test_oj_third_paragraph():
+    doc = _parse_oj()
+    p = doc.paragraphs[2]
+    assert p.section_number == "3"
+    assert p.title == "Short- und Long-Positionen"
+    assert "Short- und Long-Positionen" in p.content
+
+
+def test_oj_paragraphs_have_content_and_unique_numbers():
+    doc = _parse_oj()
+    for p in doc.paragraphs:
+        assert p.content.strip(), f"paragraph {p.section_number} has empty content"
+    numbers = [p.section_number for p in doc.paragraphs]
+    assert len(numbers) == len(set(numbers))
+
+
+def test_oj_law_name_excludes_annex_decoy():
+    doc = _parse_oj()
+    assert "ANHANG" not in doc.law_name
