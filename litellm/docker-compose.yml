@@ -6,6 +6,7 @@ services:
 #      - "4000:4000"
     volumes:
       - ./config/config.yml:/app/config.yaml:ro  # Read-only mount for config
+      - ./config/strip_hermes.py:/app/strip_hermes.py:ro  # callback module referenced by config.yml
     env_file:
       - .env
     environment:
