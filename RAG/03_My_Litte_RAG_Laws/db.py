@@ -205,9 +205,14 @@ class LegalDatabase:
             return dict(row) if row else None
 
     def search_paragraphs(self, query: str, limit: int = 20) -> list[dict]:
-        # Sanitize FTS5 query: wrap in double quotes for phrase search to
-        # prevent FTS5 operators (AND, OR, NEAR, *, column:) from breaking.
-        safe_query = '"{}"'.format(query.replace('"', '""'))
+        # Sanitize FTS5 query: quote each whitespace-separated term individually
+        # and join with spaces (FTS5 implicit AND). Prevents FTS5 operators
+        # (AND, OR, NEAR, *, column:) from breaking; doubled quotes stay literal.
+        terms = [f'"{t.replace(chr(34), chr(34) * 2)}"'
+                 for t in query.split()]
+        if not terms:
+            return []
+        safe_query = " ".join(terms)
         with self._conn() as conn:
             rows = conn.execute(
                 """SELECT p.*, l.name as law_name, l.abbreviation as law_abbreviation,

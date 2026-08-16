@@ -223,3 +223,27 @@ def test_find_law_by_full_name(db):
     # Nonexistent
     result = db.find_law("NONEXISTENT")
     assert result is None
+
+
+def test_fts_multi_term_non_adjacent_match(db):
+    """FTS5 multi-term query must match terms that are far apart in the text.
+
+    Regression test: the old code wrapped the whole query in double quotes
+    (phrase search), so a two-term query only matched adjacent terms and
+    returned [] for a sentence where the terms are non-adjacent.
+    """
+    law_id = db.insert_law("Vergaberecht Test", "VRG", "2024-01-01", "test.md")
+    db.insert_paragraph(
+        law_id, "1", "paragraph", "",
+        "§ 1 Die Vergabe von öffentlichen Aufträgen erfolgt gemäß dem "
+        "geltenden Wettbewerbsrecht.",
+    )
+
+    results = db.search_paragraphs("Vergabe Wettbewerbsrecht")
+    assert len(results) >= 1
+    assert results[0]["section_number"] == "1"
+
+    single = db.search_paragraphs("Vergabe")
+    assert len(single) >= 1
+
+    assert db.search_paragraphs("   ") == []

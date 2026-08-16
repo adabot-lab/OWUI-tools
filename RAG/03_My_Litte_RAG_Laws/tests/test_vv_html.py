@@ -94,3 +94,21 @@ def test_accepts_decoded_string_input():
     doc = VVHtmlParser().parse(text)
     assert len(doc.paragraphs) == 5
     assert doc.abbreviation == "VOB/A"
+
+
+def test_letter_suffix_section_keeps_lowercase():
+    """§ 6a must be stored as '6a', not uppercased to '6A'.
+
+    Regression test: section numbers used to be .upper()-ed, which corrupted
+    letter-suffix sections like § 6a.
+    """
+    mini_html = """<html><head><title>Testvergabe (TVg)</title></head><body>
+<p>Vom 1. Januar 2020</p>
+<p><b>&#167; 6a</b></p>
+<p>Titel von sechs a</p>
+<p>Inhalt des Paragraphen sechs a.</p>
+</body></html>"""
+    doc = VVHtmlParser().parse(mini_html)
+    assert len(doc.paragraphs) == 1
+    assert doc.paragraphs[0].section_number == "6a"
+    assert doc.paragraphs[0].content.startswith("§ 6a")

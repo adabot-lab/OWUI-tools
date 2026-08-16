@@ -63,6 +63,22 @@ def store_result(
     else:
         print(f"  Validation: OK (no issues)")
 
+    # Skip documents with empty abbreviation: the laws table has
+    # abbreviation TEXT NOT NULL UNIQUE, so two empty-abbrev docs in one run
+    # would collapse into one row and silently delete each other's paragraphs.
+    if not dry_run and db and not doc.abbreviation.strip():
+        print("  WARNING: empty abbreviation — skipping DB write "
+              "(would collide with other laws via UNIQUE constraint)")
+        return {
+            "url": url,
+            "law_name": doc.law_name,
+            "abbreviation": doc.abbreviation,
+            "source_type": result.source_type,
+            "section_count": len(doc.paragraphs),
+            "issues": report.issues,
+            "skipped": "empty_abbreviation",
+        }
+
     # Store in database
     if not dry_run and db:
         law_id = db.insert_law(

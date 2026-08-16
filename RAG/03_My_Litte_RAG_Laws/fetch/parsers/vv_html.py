@@ -118,7 +118,7 @@ class VVHtmlParser(BaseParser):
             if m:
                 raw_number = m.group(1).strip()
                 # Normalize suffix spacing: "1 EU" -> "1 EU" (single space)
-                number = re.sub(r"\s+", " ", raw_number).upper() if raw_number else raw_number
+                number = re.sub(r"\s+", " ", raw_number) if raw_number else raw_number
                 # The title is the following non-empty line
                 title = ""
                 for ahead in range(idx + 1, len(lines)):
