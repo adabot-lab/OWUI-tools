@@ -192,6 +192,7 @@ class RetrievalEngine:
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     query=dense_vector,
+                    using="dense",
                     query_filter=None,
                     limit=top_k,
                     with_payload=True
@@ -279,6 +280,7 @@ class RetrievalEngine:
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     query=dense_vector,
+                    using="dense",
                     query_filter=file_filter,
                     limit=top_k,
                     with_payload=True
