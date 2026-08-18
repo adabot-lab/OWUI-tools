@@ -311,6 +311,10 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
                     current_hash = get_file_hash(path)
             except OSError as e:
                 logger.log(f"Could not access file {path}: {e}", "WARNING")
+                # Transiently unreadable: carry the stored entry over unchanged so the
+                # deleted-diff below does not classify this file as deleted (B4).
+                if file_key in stored_metadata:
+                    current_metadata[file_key] = stored_metadata[file_key]
                 continue
 
             # Check if file changed or needs reprocessing for this collection
@@ -406,6 +410,24 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
     if not force_reindex:
         deleted_files = set(stored_metadata.keys()) - set(current_metadata.keys())
         for deleted_file in deleted_files:
+            # Guard: verify the file is truly gone before evicting.
+            # Do NOT use Path.exists() — it swallows OSError and returns False,
+            # which would re-open the exact bug class being fixed (B4).
+            try:
+                os.stat(deleted_file)
+            except FileNotFoundError:
+                pass  # file really is gone – fall through to deletion handling
+            except OSError as e:
+                # Other stat failure (e.g. permissions): assume alive
+                current_metadata[deleted_file] = stored_metadata[deleted_file]
+                logger.log(f"Path unreadable, not evicting: {deleted_file} ({e})", "WARNING")
+                continue
+            else:
+                # stat succeeded — file exists but was not scanned this run (e.g. rglob missed it)
+                current_metadata[deleted_file] = stored_metadata[deleted_file]
+                logger.log(f"Path exists but was not scanned this run, not evicting: {deleted_file}", "WARNING")
+                continue
+
             logger.log(f"File deleted: {deleted_file}")
             # Determine which collection this file belonged to
             deleted_file_path = Path(deleted_file)
