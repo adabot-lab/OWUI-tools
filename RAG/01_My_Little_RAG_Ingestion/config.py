@@ -22,7 +22,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 # Ollama
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+
+# Deliberately re-declared in RAG/02_My_Little_RAG/retrieval_engine.py (self-contained
+# subtools, no shared config module). When changing a default here, change the mirror
+# there and keep both aligned. The OPENAI_BASE_URL/OPENAI_RETRIEVAL_URL split is
+# intentional divergence — see the OpenAI comment above.
 
 # Qdrant
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks")
@@ -36,6 +41,22 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))    # Reserved: overlap betw
 
 # BM25 configuration
 BM25_LANGUAGE = os.getenv("BM25_LANGUAGE", "german")
+
+
+def validate_required_env():
+    required = ["QDRANT_HOST", "QDRANT_COLLECTION", "EMBEDDING_MODEL_NAME", "PROVIDER"]
+    provider = os.environ.get("PROVIDER", "").lower()
+    if provider == "openai":
+        required.append("OPENAI_BASE_URL")
+    elif provider == "ollama":
+        required.append("OLLAMA_BASE_URL")
+    missing = [v for v in required if not os.environ.get(v)]
+    if missing:
+        raise SystemExit(
+            f"[RAG/01 ingestion] Missing required environment variables: {', '.join(missing)}\n"
+            "Copy RAG/.env.example to the compose project .env and set the listed variables."
+        )
+
 
 # Semaphore to limit concurrent embedding requests to prevent server overload
 # With larger ubatch-size, we can process more requests safely, but still want some control

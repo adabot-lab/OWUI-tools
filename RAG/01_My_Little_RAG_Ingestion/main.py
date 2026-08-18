@@ -1,7 +1,7 @@
 from pathlib import Path
 from tqdm import tqdm
 
-from config import INPUT_DIR, QDRANT_COLLECTION
+from config import INPUT_DIR, QDRANT_COLLECTION, validate_required_env
 from logger import logger
 from metadata import load_documents_incremental
 from chunking import (
@@ -15,6 +15,7 @@ from qdrant_ops import update_qdrant_index
 
 def main():
     """Main ingestion process"""
+    validate_required_env()
     try:
         logger.log("Starting document ingestion")
         logger.log(f"Using collection: {QDRANT_COLLECTION}")

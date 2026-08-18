@@ -34,5 +34,7 @@ services:
     env_file:
       - .env
     command: uvicorn main:app --host 0.0.0.0 --port 8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - ollama-tools

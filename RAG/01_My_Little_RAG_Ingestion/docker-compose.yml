@@ -42,6 +42,8 @@ services:
       - FORCE_REINDEX=false
       # BM25 text search language
       - BM25_LANGUAGE=${BM25_LANGUAGE:-german}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - ollama-tools
 

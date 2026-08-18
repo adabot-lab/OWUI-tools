@@ -12,6 +12,11 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
 
 # Configuration
+# Deliberately re-declared in RAG/01_My_Little_RAG_Ingestion/config.py (self-contained
+# subtools, no shared config module). When changing a default here, change the mirror
+# there and keep both aligned. The OPENAI_BASE_URL/OPENAI_RETRIEVAL_URL split is
+# intentional divergence — see the OpenAI comment below.
+
 # Qdrant
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
@@ -38,6 +43,24 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:1143
 
 # BM25 configuration
 BM25_LANGUAGE = os.getenv("BM25_LANGUAGE", "german")
+
+
+def validate_required_env():
+    required = ["QDRANT_HOST", "QDRANT_COLLECTION", "EMBEDDING_MODEL_NAME", "PROVIDER"]
+    provider = os.environ.get("PROVIDER", "").lower()
+    if provider == "openai":
+        required.append("OPENAI_BASE_URL")
+    elif provider == "ollama":
+        required.append("OLLAMA_BASE_URL")
+    missing = [v for v in required if not os.environ.get(v)]
+    if missing:
+        raise SystemExit(
+            f"[RAG/02 retrieval] Missing required environment variables: {', '.join(missing)}\n"
+            "Copy RAG/.env.example to the compose project .env and set the listed variables."
+        )
+
+
+validate_required_env()
 
 def _build_bm25_query(text: str):
     options = {"language": BM25_LANGUAGE.lower()} if BM25_LANGUAGE and BM25_LANGUAGE.lower() != "none" else None
