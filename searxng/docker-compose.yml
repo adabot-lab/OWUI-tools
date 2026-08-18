@@ -28,6 +28,7 @@ services:
       - searxng-data:/var/cache/searxng:rw
     environment:
       - SEARXNG_BASE_URL=https://${SEARXNG_HOSTNAME:-localhost}/
+      - "SEARXNG_SECRET=${SEARXNG_SECRET:?SEARXNG_SECRET missing - generate with: openssl rand -hex 24 (see .env.example)}"
     logging:
       driver: "json-file"
       options:
