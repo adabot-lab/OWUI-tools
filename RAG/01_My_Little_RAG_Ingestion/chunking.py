@@ -80,6 +80,81 @@ def estimate_token_count(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+class _TokenBudgetAccumulator:
+    """Greedy unit accumulator enforcing an exact MAX_CHUNK_SIZE cap.
+
+    Per-unit token counts are computed once (estimate_token_count per unit).
+    A cheap running sum (exact per-unit counts + 1 join allowance per unit, for
+    the ' ' or '\\n\\n' separators) gates appends while it stays <= JOIN_GATE_RATIO
+    (80%) of max_tokens; once past the gate, every append is verified with an
+    exact full-buffer re-encode (non-additive BPE safety). The final text is
+    always exact-checked before emit.
+    """
+    JOIN_GATE_RATIO = 0.8
+
+    def __init__(self, max_tokens: int, joiner: str):
+        self._max_tokens = max_tokens
+        self._joiner = joiner
+        self._units: List[str] = []
+        self._cheap_sum = 0  # sum of exact per-unit counts + 1 token per unit for separator
+        self._gate_crossed = False
+
+    def add(self, unit: str, unit_token_count: int) -> bool:
+        """Try to append a unit. Returns True if appended, False if it would
+        exceed max_tokens (caller flushes and re-adds the unit to a fresh
+        accumulator). MUST NOT mutate state on a False return."""
+        if not self._units:
+            # First unit — always accept (unbreakable-unit case handled by caller).
+            self._units.append(unit)
+            self._cheap_sum = unit_token_count + 1  # +1 for future separator
+            if self._cheap_sum > self._max_tokens * self.JOIN_GATE_RATIO:
+                self._gate_crossed = True
+            return True
+
+        if not self._gate_crossed:
+            # Below the gate: accept on the cheap sum WITHOUT exact re-encode.
+            # Rationale: join slack cannot realistically add 20% — per-unit
+            # counts already include each unit's own tokens; the +1/unit
+            # allowance covers separator tokens; below 80% even pathological
+            # merges stay under the cap.
+            projected = self._cheap_sum + unit_token_count + 1
+            if projected <= self._max_tokens * self.JOIN_GATE_RATIO:
+                self._units.append(unit)
+                self._cheap_sum = projected
+                return True
+            # Would cross the gate — fall through to exact mode to decide.
+            self._gate_crossed = True
+
+        # Above the gate: use exact full-buffer re-encode (worst case
+        # degrades to today's quadratic, never worse).
+        candidate_text = self._joiner.join(self._units + [unit])
+        if estimate_token_count(candidate_text) <= self._max_tokens:
+            self._units.append(unit)
+            self._cheap_sum += unit_token_count + 1
+            return True
+        return False
+
+    def text(self) -> str:
+        """Return the joined text of accumulated units."""
+        return self._joiner.join(self._units)
+
+    def token_count(self) -> int:
+        """Cheap sum (with join allowances), NOT exact."""
+        return self._cheap_sum
+
+    def unit_token_sum(self) -> int:
+        """Plain sum of per-unit token counts WITHOUT join allowances.
+
+        Matches the pre-accumulator buffer_token_count semantics so the
+        MIN_CHUNK_SIZE flush fires at exactly the same boundaries as before.
+        """
+        return self._cheap_sum - len(self._units)
+
+    def exact_token_count(self) -> int:
+        """Exact token count via estimate_token_count(self.text())."""
+        return estimate_token_count(self.text())
+
+
 def split_sentences_respecting_bounds(text: str) -> List[str]:
     """
     Split text into sentences while respecting legal abbreviations and notation.
@@ -149,20 +224,45 @@ def _split_words_by_token_budget(
     if not words:
         return []
     chunks: List[str] = []
-    current_words: List[str] = []
-    for word in words:
-        # Re-encode the full proposed chunk to get the exact token count —
-        # do NOT rely on a running sum, which drifts for non-additive BPE.
-        candidate = current_words + [word]
-        candidate_text = " ".join(candidate)
-        if estimate_token_count(candidate_text) > max_tokens and current_words:
-            # This word would overflow; flush current buffer and start fresh.
-            chunks.append(" ".join(current_words))
-            current_words = [word]
+    # Cache per-word token counts so estimate_token_count is called exactly
+    # once per word.
+    word_counts = [estimate_token_count(w) for w in words]
+    acc = _TokenBudgetAccumulator(max_tokens, " ")
+    for i, word in enumerate(words):
+        if not acc.add(word, word_counts[i]):
+            # Flush current buffer, then add rejected word to a fresh accumulator.
+            chunk_text = acc.text()
+            # Defensive final check: if the exact check somehow exceeds max
+            # (cannot happen below the gate by design, but guard defensively),
+            # split the buffer text with _split_words_by_token_budget as a
+            # last-resort fallback so no emitted chunk violates the cap.
+            # A single-unit buffer is the unbreakable-word case — emit as-is
+            # (documented above); recursing on it would not terminate.
+            if estimate_token_count(chunk_text) > max_tokens:
+                sub_words = chunk_text.split()
+                if len(sub_words) <= 1:
+                    chunks.append(chunk_text)
+                else:
+                    chunks.extend(_split_words_by_token_budget(sub_words, max_tokens))
+            else:
+                chunks.append(chunk_text)
+            acc = _TokenBudgetAccumulator(max_tokens, " ")
+            # Single unit exceeding max (unbreakable word) — accept alone.
+            acc.add(word, word_counts[i])
+    # Flush remaining words.
+    if acc.token_count() > 0:
+        chunk_text = acc.text()
+        if estimate_token_count(chunk_text) > max_tokens:
+            # A single unit whose own count exceeds max_tokens is emitted as-is
+            # (unbreakable word, documented above) — recursing on it would not
+            # terminate, so only re-split genuinely multi-word buffers.
+            sub_words = chunk_text.split()
+            if len(sub_words) <= 1:
+                chunks.append(chunk_text)
+            else:
+                chunks.extend(_split_words_by_token_budget(sub_words, max_tokens))
         else:
-            current_words = candidate
-    if current_words:
-        chunks.append(" ".join(current_words))
+            chunks.append(chunk_text)
     return chunks
 
 
@@ -180,44 +280,79 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
         paragraphs = split_into_paragraphs(full_text)
 
         chunk_id = 0
-        buffer = []
-        buffer_token_count = 0
+        para_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, "\n\n")
 
         for para in paragraphs:
             token_count = estimate_token_count(para)
 
             if token_count > MAX_CHUNK_SIZE:
                 # Handle oversized paragraph by splitting it
-                # First, flush current buffer if it has content
-                if buffer:
-                    processed_chunks.append({
-                        "doc_id": doc["doc_id"],
-                        "chunk_id": chunk_id,
-                        "text": "\n\n".join(buffer),
-                        "source": doc["source"],
-                        "collection_name": doc.get("collection_name"),
-                    })
-                    chunk_id += 1
-                    buffer = []
-                    buffer_token_count = 0
+                # First, flush current accumulator if it has content
+                if para_acc.token_count() > 0:
+                    chunk_text = para_acc.text()
+                    if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
+                        for fb in _split_words_by_token_budget(chunk_text.split()):
+                            processed_chunks.append({
+                                "doc_id": doc["doc_id"],
+                                "chunk_id": chunk_id,
+                                "text": fb,
+                                "source": doc["source"],
+                                "collection_name": doc.get("collection_name"),
+                            })
+                            chunk_id += 1
+                    else:
+                        processed_chunks.append({
+                            "doc_id": doc["doc_id"],
+                            "chunk_id": chunk_id,
+                            "text": chunk_text,
+                            "source": doc["source"],
+                            "collection_name": doc.get("collection_name"),
+                        })
+                        chunk_id += 1
+                    para_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, "\n\n")
 
                 # Try sentence-aware splitting first for legal texts
                 sentences = split_sentences_respecting_bounds(para)
 
                 if len(sentences) > 1:
-                    # We have multiple sentences, try to group them respecting MAX_CHUNK_SIZE
-                    sentence_buffer = []
+                    # We have multiple sentences, try to group them respecting MAX_CHUNK_SIZE.
+                    # Cache per-sentence token counts so estimate_token_count
+                    # is called exactly once per sentence.
+                    sentence_counts = [estimate_token_count(s) for s in sentences]
+                    sent_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, " ")
 
-                    for sentence in sentences:
-                        sentence_token_count = estimate_token_count(sentence)
+                    for i, sentence in enumerate(sentences):
+                        stc = sentence_counts[i]
 
-                        if sentence_token_count > MAX_CHUNK_SIZE:
-                            # Individual sentence is too large; split by words
-                            # with token-aware budgeting so no chunk exceeds cap.
+                        if stc > MAX_CHUNK_SIZE:
+                            # Individual sentence is too large; flush any
+                            # accumulated sentences first, then split by words.
+                            if sent_acc.token_count() > 0:
+                                chunk_text = sent_acc.text()
+                                if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
+                                    for fb in _split_words_by_token_budget(chunk_text.split()):
+                                        processed_chunks.append({
+                                            "doc_id": doc["doc_id"],
+                                            "chunk_id": chunk_id,
+                                            "text": fb,
+                                            "source": doc["source"],
+                                            "collection_name": doc.get("collection_name"),
+                                        })
+                                        chunk_id += 1
+                                else:
+                                    processed_chunks.append({
+                                        "doc_id": doc["doc_id"],
+                                        "chunk_id": chunk_id,
+                                        "text": chunk_text,
+                                        "source": doc["source"],
+                                        "collection_name": doc.get("collection_name"),
+                                    })
+                                    chunk_id += 1
+                                sent_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, " ")
+
                             sentence_chunks = _split_words_by_token_budget(
                                 sentence.split()
                             )
-
                             for chunk_text in sentence_chunks:
                                 processed_chunks.append({
                                     "doc_id": doc["doc_id"],
@@ -228,40 +363,55 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                                 })
                                 chunk_id += 1
                         else:
-                            # Re-encode the full proposed buffer to get the exact
-                            # token count. Do NOT sum per-sentence counts — BPE
-                            # tokenizers are not additive, so the joined text can
-                            # tokenize to more (or fewer) tokens than the sum of
-                            # the parts. Mirrors _split_words_by_token_budget and
-                            # guarantees the MAX_CHUNK_SIZE cap holds exactly.
-                            candidate = sentence_buffer + [sentence]
-                            candidate_text = " ".join(candidate)
-                            if sentence_buffer and estimate_token_count(candidate_text) > MAX_CHUNK_SIZE:
-                                # Emit current buffer as chunk
+                            if not sent_acc.add(sentence, stc):
+                                # Flush current buffer, then add rejected sentence.
+                                chunk_text = sent_acc.text()
+                                if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
+                                    for fb in _split_words_by_token_budget(chunk_text.split()):
+                                        processed_chunks.append({
+                                            "doc_id": doc["doc_id"],
+                                            "chunk_id": chunk_id,
+                                            "text": fb,
+                                            "source": doc["source"],
+                                            "collection_name": doc.get("collection_name"),
+                                        })
+                                        chunk_id += 1
+                                else:
+                                    processed_chunks.append({
+                                        "doc_id": doc["doc_id"],
+                                        "chunk_id": chunk_id,
+                                        "text": chunk_text,
+                                        "source": doc["source"],
+                                        "collection_name": doc.get("collection_name"),
+                                    })
+                                    chunk_id += 1
+                                sent_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, " ")
+                                # Single sentence exceeding max would have been
+                                # caught above; this is just a normal add.
+                                sent_acc.add(sentence, stc)
+
+                    # Emit remaining sentences in buffer if any
+                    if sent_acc.token_count() > 0:
+                        chunk_text = sent_acc.text()
+                        if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
+                            for fb in _split_words_by_token_budget(chunk_text.split()):
                                 processed_chunks.append({
                                     "doc_id": doc["doc_id"],
                                     "chunk_id": chunk_id,
-                                    "text": " ".join(sentence_buffer),
+                                    "text": fb,
                                     "source": doc["source"],
                                     "collection_name": doc.get("collection_name"),
                                 })
                                 chunk_id += 1
-                                # Start new buffer with current sentence
-                                sentence_buffer = [sentence]
-                            else:
-                                # Add sentence to buffer
-                                sentence_buffer.append(sentence)
-
-                    # Emit remaining sentences in buffer if any
-                    if sentence_buffer:
-                        processed_chunks.append({
-                            "doc_id": doc["doc_id"],
-                            "chunk_id": chunk_id,
-                            "text": " ".join(sentence_buffer),
-                            "source": doc["source"],
-                            "collection_name": doc.get("collection_name"),
-                        })
-                        chunk_id += 1
+                        else:
+                            processed_chunks.append({
+                                "doc_id": doc["doc_id"],
+                                "chunk_id": chunk_id,
+                                "text": chunk_text,
+                                "source": doc["source"],
+                                "collection_name": doc.get("collection_name"),
+                            })
+                            chunk_id += 1
                 else:
                     # Fallback to word-based splitting if no sentences were found.
                     # Token-aware so no chunk exceeds cap even for German compounds.
@@ -277,56 +427,84 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                         })
                         chunk_id += 1
             else:
-                # Pre-add MAX cap check: re-encode the full proposed buffer to
-                # verify the joined text stays under MAX_CHUNK_SIZE. BPE
-                # tokenizers are not additive, so '\n\n'.join(buffer + [para])
-                # can tokenize to more than the sum of the individual paragraph
-                # counts. Mirrors _split_words_by_token_budget and the sentence
-                # path above; guarantees the cap holds exactly. When flushing,
-                # the emitted buffer was already verified <= MAX when its last
-                # paragraph was committed, so it stays within bounds.
-                candidate = buffer + [para]
-                candidate_text = "\n\n".join(candidate)
-                if buffer and estimate_token_count(candidate_text) > MAX_CHUNK_SIZE:
-                    processed_chunks.append({
-                        "doc_id": doc["doc_id"],
-                        "chunk_id": chunk_id,
-                        "text": "\n\n".join(buffer),
-                        "source": doc["source"],
-                        "collection_name": doc.get("collection_name"),
-                    })
-                    chunk_id += 1
-                    buffer = [para]
-                    buffer_token_count = token_count
-                else:
-                    buffer = candidate
-                    buffer_token_count += token_count
+                # Accumulate paragraph using the shared token-budget accumulator.
+                # The accumulator handles exact cap enforcement; below the gate
+                # it uses a cheap sum, above it re-encodes the full buffer.
+                if not para_acc.add(para, token_count):
+                    # Flush current accumulator, then add rejected paragraph.
+                    chunk_text = para_acc.text()
+                    if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
+                        for fb in _split_words_by_token_budget(chunk_text.split()):
+                            processed_chunks.append({
+                                "doc_id": doc["doc_id"],
+                                "chunk_id": chunk_id,
+                                "text": fb,
+                                "source": doc["source"],
+                                "collection_name": doc.get("collection_name"),
+                            })
+                            chunk_id += 1
+                    else:
+                        processed_chunks.append({
+                            "doc_id": doc["doc_id"],
+                            "chunk_id": chunk_id,
+                            "text": chunk_text,
+                            "source": doc["source"],
+                            "collection_name": doc.get("collection_name"),
+                        })
+                        chunk_id += 1
+                    para_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, "\n\n")
+                    # Single paragraph exceeding max would have been caught
+                    # above; this is just a normal add.
+                    para_acc.add(para, token_count)
 
                 # If buffer has reached minimum size, emit as chunk.
-                # The rough running sum is fine for the MIN threshold; the exact
-                # MAX cap was already enforced by the pre-add check above, and
-                # the buffer just committed is <= MAX by construction.
-                if buffer_token_count >= MIN_CHUNK_SIZE:
+                # unit_token_sum() (no join allowances) matches the old
+                # buffer_token_count semantics exactly; the exact MAX cap was
+                # already enforced by the accumulator.
+                if para_acc.unit_token_sum() >= MIN_CHUNK_SIZE:
+                    chunk_text = para_acc.text()
+                    if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
+                        for fb in _split_words_by_token_budget(chunk_text.split()):
+                            processed_chunks.append({
+                                "doc_id": doc["doc_id"],
+                                "chunk_id": chunk_id,
+                                "text": fb,
+                                "source": doc["source"],
+                                "collection_name": doc.get("collection_name"),
+                            })
+                            chunk_id += 1
+                    else:
+                        processed_chunks.append({
+                            "doc_id": doc["doc_id"],
+                            "chunk_id": chunk_id,
+                            "text": chunk_text,
+                            "source": doc["source"],
+                            "collection_name": doc.get("collection_name"),
+                        })
+                        chunk_id += 1
+                    para_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, "\n\n")
+
+        # Handle remaining content in accumulator - emit as final chunk even if smaller than MIN_CHUNK_SIZE
+        if para_acc.token_count() > 0:
+            chunk_text = para_acc.text()
+            if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
+                for fb in _split_words_by_token_budget(chunk_text.split()):
                     processed_chunks.append({
                         "doc_id": doc["doc_id"],
                         "chunk_id": chunk_id,
-                        "text": "\n\n".join(buffer),
+                        "text": fb,
                         "source": doc["source"],
                         "collection_name": doc.get("collection_name"),
                     })
                     chunk_id += 1
-                    buffer = []
-                    buffer_token_count = 0
-
-        # Handle remaining content in buffer - emit as final chunk even if smaller than MIN_CHUNK_SIZE
-        if buffer:
-            processed_chunks.append({
-                "doc_id": doc["doc_id"],
-                "chunk_id": chunk_id,
-                "text": "\n\n".join(buffer),
-                "source": doc["source"],
-                "collection_name": doc.get("collection_name"),
-            })
+            else:
+                processed_chunks.append({
+                    "doc_id": doc["doc_id"],
+                    "chunk_id": chunk_id,
+                    "text": chunk_text,
+                    "source": doc["source"],
+                    "collection_name": doc.get("collection_name"),
+                })
 
         return processed_chunks
     except Exception as e:
@@ -481,16 +659,3 @@ def cleanup_pending_chunks(path: str = CHUNKS_DIR, collection_name: str = QDRANT
         logger.log(f"Cleaned up {cleaned_count} pending chunks", "INFO")
     
     return cleaned_count
-
-def load_cached_chunks(path: str = CHUNKS_DIR):
-    # Use collection-specific subfolder
-    collection_chunks_dir = os.path.join(path, QDRANT_COLLECTION)
-    for file in Path(collection_chunks_dir).glob("*.json"):
-        # Skip .pending directory
-        if ".pending" in str(file):
-            continue
-        try:
-            with open(file, "r", encoding="utf-8") as f:
-                yield json.load(f)
-        except Exception as e:
-            logger.log(f"Could not read chunk file {file}: {e}", "WARNING")
