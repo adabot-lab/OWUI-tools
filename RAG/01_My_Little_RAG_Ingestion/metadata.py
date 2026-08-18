@@ -160,12 +160,10 @@ def get_existing_doc_ids(collection_name: str = None) -> set:
         if ".pending" in str(chunk_file):
             continue
         try:
-            with open(chunk_file, 'r', encoding='utf-8') as f:
-                chunk = json.load(f)
-                if isinstance(chunk, dict) and 'doc_id' in chunk:
-                    doc_ids.add(int(chunk['doc_id']))
-        except Exception as e:
-            logger.log(f"Could not read chunk file {chunk_file}: {e}", "WARNING")
+            doc_id = int(chunk_file.stem.split('_')[0])
+            doc_ids.add(doc_id)
+        except (ValueError, IndexError):
+            logger.log(f"Could not parse doc_id from filename {chunk_file.name}", "WARNING")
     return doc_ids
 
 def get_next_doc_id(collection_name: str = None, stored_metadata: Dict[str, Any] = None) -> int:
@@ -242,45 +240,63 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
     # Build comprehensive mapping of file paths to doc_ids for ALL collections first
     # Include both main directory and .pending directory to handle failed runs
     all_path_to_doc_id = {}
+    stored_path_maps = stored_metadata.setdefault('_path_maps', {})
     for collection_name in files_by_collection.keys():
-        collection_chunks_dir = os.path.join(CHUNKS_DIR, collection_name)
-        pending_chunks_dir = os.path.join(collection_chunks_dir, ".pending")
-        
-        # Load from main directory
-        if os.path.exists(collection_chunks_dir):
-            for chunk_file in Path(collection_chunks_dir).glob("*.json"):
-                if ".pending" in str(chunk_file):
-                    continue
-                try:
-                    with open(chunk_file, 'r', encoding='utf-8') as f:
-                        chunk = json.load(f)
-                        source_path = chunk['source']
-                        # Store with collection context to avoid conflicts
-                        key = f"{collection_name}:{source_path}"
-                        all_path_to_doc_id[key] = {
-                            'doc_id': chunk['doc_id'],
-                            'collection': collection_name
-                        }
-                except Exception as e:
-                    logger.log(f"Could not read chunk file {chunk_file}: {e}", "WARNING")
-        
-        # Load from .pending directory (to handle chunks that weren't successfully embedded)
-        if os.path.exists(pending_chunks_dir):
-            for chunk_file in Path(pending_chunks_dir).glob("*.json"):
-                try:
-                    with open(chunk_file, 'r', encoding='utf-8') as f:
-                        chunk = json.load(f)
-                        source_path = chunk['source']
-                        # Store with collection context to avoid conflicts
-                        key = f"{collection_name}:{source_path}"
-                        # If the file is also in the main directory, prefer that (it was successfully embedded)
-                        if key not in all_path_to_doc_id:
+        if collection_name in stored_path_maps and stored_path_maps[collection_name]:
+            # Use persisted map — skip the expensive disk scan
+            for source_path, doc_id in stored_path_maps[collection_name].items():
+                key = f"{collection_name}:{source_path}"
+                all_path_to_doc_id[key] = {
+                    'doc_id': doc_id,
+                    'collection': collection_name
+                }
+        else:
+            # No persisted map for this collection — scan chunks on disk
+            collection_chunks_dir = os.path.join(CHUNKS_DIR, collection_name)
+            pending_chunks_dir = os.path.join(collection_chunks_dir, ".pending")
+            
+            # Load from main directory
+            if os.path.exists(collection_chunks_dir):
+                for chunk_file in Path(collection_chunks_dir).glob("*.json"):
+                    if ".pending" in str(chunk_file):
+                        continue
+                    try:
+                        with open(chunk_file, 'r', encoding='utf-8') as f:
+                            chunk = json.load(f)
+                            source_path = chunk['source']
+                            # Store with collection context to avoid conflicts
+                            key = f"{collection_name}:{source_path}"
                             all_path_to_doc_id[key] = {
                                 'doc_id': chunk['doc_id'],
                                 'collection': collection_name
                             }
-                except Exception as e:
-                    logger.log(f"Could not read pending chunk file {chunk_file}: {e}", "WARNING")
+                    except Exception as e:
+                        logger.log(f"Could not read chunk file {chunk_file}: {e}", "WARNING")
+            
+            # Load from .pending directory (to handle chunks that weren't successfully embedded)
+            if os.path.exists(pending_chunks_dir):
+                for chunk_file in Path(pending_chunks_dir).glob("*.json"):
+                    try:
+                        with open(chunk_file, 'r', encoding='utf-8') as f:
+                            chunk = json.load(f)
+                            source_path = chunk['source']
+                            # Store with collection context to avoid conflicts
+                            key = f"{collection_name}:{source_path}"
+                            # If the file is also in the main directory, prefer that (it was successfully embedded)
+                            if key not in all_path_to_doc_id:
+                                all_path_to_doc_id[key] = {
+                                    'doc_id': chunk['doc_id'],
+                                    'collection': collection_name
+                                }
+                    except Exception as e:
+                        logger.log(f"Could not read pending chunk file {chunk_file}: {e}", "WARNING")
+
+            # Backfill _path_maps from the scan result
+            path_map = {}
+            for map_key, val in all_path_to_doc_id.items():
+                if map_key.startswith(f"{collection_name}:"):
+                    path_map[map_key[len(collection_name) + 1:]] = val['doc_id']
+            stored_path_maps[collection_name] = path_map
 
     new_docs = []
     changed_doc_ids_by_collection: Dict[str, set] = defaultdict(set)
@@ -385,6 +401,8 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
                     # Assign new doc_id
                     doc_id = doc_id_counter
                     doc_id_counter += 1
+                    # Record in _path_maps so an interrupted run keeps the mapping
+                    stored_path_maps.setdefault(collection_name, {})[file_key] = doc_id
 
                 new_docs.append({
                     "text": text,
@@ -405,6 +423,12 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
     counters = stored_metadata.get('_counters', {})
     if counters:
         current_metadata.setdefault('_counters', {}).update(counters)
+
+    # Persist path maps so subsequent runs can skip chunk-dir scans.
+    # FORCE_REINDEX: clears Qdrant collections but not the chunks dir, so the map stays valid.
+    path_maps = stored_metadata.get('_path_maps', {})
+    if path_maps:
+        current_metadata.setdefault('_path_maps', {}).update(path_maps)
 
     # Check for deleted files (only if not force reindexing)
     if not force_reindex:
@@ -435,43 +459,49 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
 
             # Find and remove chunks for deleted files
             # Need to load doc_id from the specific collection's chunks (both main and .pending)
-            path_to_doc_id = {}
-            collection_chunks_dir = os.path.join(CHUNKS_DIR, collection_name)
-            pending_chunks_dir = os.path.join(collection_chunks_dir, ".pending")
-            
-            # Check main directory
-            if os.path.exists(collection_chunks_dir):
-                for chunk_file in Path(collection_chunks_dir).glob("*.json"):
-                    if ".pending" in str(chunk_file):
-                        continue
-                    try:
-                        with open(chunk_file, 'r', encoding='utf-8') as f:
-                            chunk = json.load(f)
-                            source_path = chunk['source']
-                            if source_path == deleted_file:
-                                path_to_doc_id[source_path] = chunk['doc_id']
-                    except Exception as e:
-                        logger.log(f"Could not read chunk file {chunk_file}: {e}", "WARNING")
-            
-            # Check .pending directory
-            if os.path.exists(pending_chunks_dir):
-                for chunk_file in Path(pending_chunks_dir).glob("*.json"):
-                    try:
-                        with open(chunk_file, 'r', encoding='utf-8') as f:
-                            chunk = json.load(f)
-                            source_path = chunk['source']
-                            if source_path == deleted_file:
-                                # Only add if not already in path_to_doc_id (prefer main directory)
-                                if source_path not in path_to_doc_id:
+            # O1: map hit avoids the full collection rescan; scan only backfills first-run-after-upgrade
+            mapped_doc_id = stored_path_maps.get(collection_name, {}).get(deleted_file)
+            if mapped_doc_id is not None:
+                path_to_doc_id = {deleted_file: mapped_doc_id}
+            else:
+                path_to_doc_id = {}
+                collection_chunks_dir = os.path.join(CHUNKS_DIR, collection_name)
+                pending_chunks_dir = os.path.join(collection_chunks_dir, ".pending")
+                
+                # Check main directory
+                if os.path.exists(collection_chunks_dir):
+                    for chunk_file in Path(collection_chunks_dir).glob("*.json"):
+                        if ".pending" in str(chunk_file):
+                            continue
+                        try:
+                            with open(chunk_file, 'r', encoding='utf-8') as f:
+                                chunk = json.load(f)
+                                source_path = chunk['source']
+                                if source_path == deleted_file:
                                     path_to_doc_id[source_path] = chunk['doc_id']
-                    except Exception as e:
-                        logger.log(f"Could not read pending chunk file {chunk_file}: {e}", "WARNING")
+                        except Exception as e:
+                            logger.log(f"Could not read chunk file {chunk_file}: {e}", "WARNING")
+                
+                # Check .pending directory
+                if os.path.exists(pending_chunks_dir):
+                    for chunk_file in Path(pending_chunks_dir).glob("*.json"):
+                        try:
+                            with open(chunk_file, 'r', encoding='utf-8') as f:
+                                chunk = json.load(f)
+                                source_path = chunk['source']
+                                if source_path == deleted_file:
+                                    # Only add if not already in path_to_doc_id (prefer main directory)
+                                    if source_path not in path_to_doc_id:
+                                        path_to_doc_id[source_path] = chunk['doc_id']
+                        except Exception as e:
+                            logger.log(f"Could not read pending chunk file {chunk_file}: {e}", "WARNING")
 
             if deleted_file in path_to_doc_id:
                 doc_id_to_remove = path_to_doc_id[deleted_file]
                 # Record for deletion BEFORE removing chunk files (avoid timing issue)
                 changed_doc_ids_by_collection[collection_name].add(int(doc_id_to_remove))
                 remove_old_chunks(doc_id_to_remove, chunks_dir=CHUNKS_DIR, collection_name=collection_name)
+                stored_path_maps.get(collection_name, {}).pop(deleted_file, None)
                 logger.log(f"Marked doc_id {doc_id_to_remove} for removal from collection {collection_name}")
 
     # Save updated metadata
