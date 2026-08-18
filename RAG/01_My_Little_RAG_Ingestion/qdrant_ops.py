@@ -107,8 +107,8 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
     Returns:
         List of file keys (paths) that were successfully embedded
     """
-    # Track files that were successfully embedded for marking
-    successfully_embedded_files = set()
+    # Track chunk_ids actually upserted, per source file
+    upserted_chunk_ids: dict[str, set[int]] = {}
     
     # Increase timeout to handle larger processing times
     client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=300)
@@ -310,9 +310,10 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
                         successful_points += len(points)
                         logger.log(f"Successfully upserted batch {batch_number}/{total_batches} ({len(points)} points) in collection {collection_name}")
                         
-                        # Track files that were successfully embedded for later marking
+                        # Track chunk_ids actually upserted per source file
                         for chunk in valid_chunks:
-                            successfully_embedded_files.add(chunk['source'])
+                            src = chunk['source']
+                            upserted_chunk_ids.setdefault(src, set()).add(chunk['chunk_id'])
 
                         break  # Success, exit retry loop
 
@@ -329,12 +330,37 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
 
             logger.log(f"Completed upserting for collection {collection_name}. Successful points: {successful_points}, Failed chunks: {failed_chunks}")
             
-            # Move chunks from .pending to main directory for successfully embedded files
-            if successful_points > 0:
-                successful_doc_ids = list(set([chunk['doc_id'] for chunk in collection_chunks if chunk['source'] in successfully_embedded_files]))
+            # Determine which sources are fully embedded (all expected chunk_ids present)
+            expected_by_source: dict[str, set[int]] = {}
+            for chunk in collection_chunks:
+                expected_by_source.setdefault(chunk['source'], set()).add(chunk['chunk_id'])
+
+            fully_embedded = [
+                src for src, ids in expected_by_source.items()
+                if upserted_chunk_ids.get(src, set()) >= ids
+            ]
+
+            # Log partially-embedded sources (some chunks upserted but not all)
+            for src, expected_ids in expected_by_source.items():
+                upserted = upserted_chunk_ids.get(src, set())
+                if upserted and not upserted >= expected_ids:
+                    # A permanently-failing chunk keeps its file embedded:false and
+                    # retries every run — strict completeness over silent gaps.
+                    logger.log(
+                        f"File not fully embedded, will retry next run: {src} "
+                        f"({len(upserted)}/{len(expected_ids)} chunks)",
+                        "ERROR",
+                    )
+
+            # Move chunks and mark files only for fully-embedded sources
+            if fully_embedded:
+                fully_embedded_file_keys = list(fully_embedded)
+                successful_doc_ids = list(set(
+                    chunk['doc_id'] for chunk in collection_chunks
+                    if chunk['source'] in fully_embedded
+                ))
                 if successful_doc_ids:
                     move_chunks_from_pending(successful_doc_ids, path=CHUNKS_DIR, collection_name=collection_name)
-                    
-                    # Mark files as successfully embedded (commit phase)
-                    successfully_embedded_file_keys = [f for f in successfully_embedded_files]
-                    mark_as_embedded(successfully_embedded_file_keys, collection_name)
+
+                # Mark files as successfully embedded (commit phase)
+                mark_as_embedded(fully_embedded_file_keys, collection_name)
