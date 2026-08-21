@@ -194,6 +194,13 @@ model_list:
       model: deepseek/deepseek-v4-pro
       api_key: os.environ/DEEPSEEK_API_KEY
 
+  # Experimental vision model (docs: https://api-docs.deepseek.com/guides/vision).
+  # No pricing suffix: experimental, pricing not yet published — SpendLogs will show $0 until costs are added.
+  - model_name: deepseek-v4-flash-vision-exp
+    litellm_params:
+      model: deepseek/deepseek-v4-flash-vision-exp
+      api_key: os.environ/DEEPSEEK_API_KEY
+
   # ==================== MISTRAL AI ====================
 
   - model_name: mistral-mistral-small(0.1/0.3)
