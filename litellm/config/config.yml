@@ -196,9 +196,14 @@ model_list:
 
   # Experimental vision model (docs: https://api-docs.deepseek.com/guides/vision).
   # No pricing suffix: experimental, pricing not yet published — SpendLogs will show $0 until costs are added.
+  # Routed via the openai/ provider, NOT deepseek/: litellm 1.93.0's deepseek
+  # transformation flattens message content lists to plain strings (drops image
+  # parts, vision arrives empty); DeepSeek's API is OpenAI-compatible, and the
+  # openai/ path passes content-part lists through unchanged.
   - model_name: deepseek-v4-flash-vision-exp
     litellm_params:
-      model: deepseek/deepseek-v4-flash-vision-exp
+      model: openai/deepseek-v4-flash-vision-exp
+      api_base: https://api.deepseek.com/v1
       api_key: os.environ/DEEPSEEK_API_KEY
 
   # ==================== MISTRAL AI ====================
