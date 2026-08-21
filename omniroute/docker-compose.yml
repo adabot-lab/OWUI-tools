@@ -1,0 +1,64 @@
+services:
+  omniroute:
+    image: diegosouzapw/omniroute:latest   # tracks stable channel (== 3.8.49 @ 2026-08-21); D10
+    container_name: omniroute
+    env_file:
+      - .env
+    environment:
+      # Two-port variant (user 2026-08-21): dashboard + API published,
+      # live websocket stays internal (loopback-bound by default).
+      - PORT=20128
+      - DASHBOARD_PORT=20128
+      - API_PORT=20129
+      - LIVE_WS_PORT=20132          # internal only — NOT published
+      # Upstream binds the API bridge to 127.0.0.1 inside the container —
+      # docker-proxy could never reach it. 0.0.0.0 is REQUIRED for the
+      # published :20129 to work (verified in image source; REQUIRE_API_KEY
+      # still gates all /v1/* calls).
+      - API_HOST=0.0.0.0
+      - REDIS_URL=redis://omniroute-redis:6379   # NOT the default redis://redis:6379
+    # ports published via local.docker-compose.yml (per-host), litellm pattern
+#    ports:
+#      - "20128:20128"   # dashboard
+#      - "20129:20129"   # /v1 API
+    volumes:
+      - omniroute-data:/app/data
+    restart: unless-stopped
+    stop_grace_period: 40s
+    networks:
+      - ollama-tools
+      - omniroute
+    depends_on:
+      omniroute-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.mjs"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Upstream calls this service `redis` — renamed: searxng's compose already
+  # defines a `redis` service in the same include tree (parse conflict).
+  omniroute-redis:
+    image: docker.io/library/redis:8.6.5-alpine
+    container_name: omniroute-redis
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - omniroute-redis-data:/data
+    restart: unless-stopped
+    networks:
+      - omniroute
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  omniroute-data:
+  omniroute-redis-data:
+
+networks:
+  omniroute:
+    name: omniroute
