@@ -25,3 +25,29 @@ services:
         max-size: "5m"
         max-file: "3"
 
+  # Tier-2 stealth-fetch sidecar: chromium exposing CDP, docker-internal only.
+  # SECURITY: no ports: publish — CDP is unauthenticated and must never reach the LAN.
+  # Image ENTRYPOINT is "chromium-browser --headless"; the command list appends to it.
+  browser:
+    image: zenika/alpine-chrome:latest
+    container_name: browser
+    init: true
+    command:
+      - --remote-debugging-port=9222
+      - --remote-debugging-address=0.0.0.0
+      - --user-data-dir=/home/chromium/profile
+      - --no-sandbox
+      - --disable-gpu
+      - --disable-dev-shm-usage
+    mem_limit: 768m
+    cpus: 1.0
+    volumes:
+      - ./browser-profile:/home/chromium/profile
+    restart: unless-stopped
+    networks:
+      - ollama-tools
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"

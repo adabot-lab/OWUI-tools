@@ -262,6 +262,15 @@ def _is_script_heavy(html: Optional[str]) -> bool:
     return html.lower().count("<script") >= _SCRIPT_TAG_THRESHOLD
 
 
+def _looks_like_js_shell(html: str) -> bool:
+    """Return True for the app-shell variant of an empty 200: substantial raw
+    HTML (>= _BROWSER_MIN_HTML_CHARS) carrying at least one script tag that
+    nonetheless extracts no text. Catches single-script custom-element apps
+    (Reddit's shell: ~8KB HTML, 1 script, hydrated client-side) which the
+    >=5-scripts heuristic alone misses."""
+    return len(html) >= _BROWSER_MIN_HTML_CHARS and "<script" in html.lower()
+
+
 def _is_empty_extraction(cleaned: Optional[str]) -> bool:
     """Return True when cleaned text is missing or suspiciously short."""
     return cleaned is None or len(cleaned.strip()) < _EMPTY_EXTRACT_CHARS
@@ -275,7 +284,9 @@ def _should_escalate_tier2(status: Optional[int], html: Optional[str], cleaned: 
     """
     if status in (403, 429):
         return True
-    if status == 200 and _is_empty_extraction(cleaned) and html is not None and _is_script_heavy(html):
+    if status == 200 and _is_empty_extraction(cleaned) and html is not None and (
+        _is_script_heavy(html) or _looks_like_js_shell(html)
+    ):
         return True
     return False
 
@@ -366,7 +377,26 @@ async def _get_browser():
 
         if _playwright_instance is None:
             _playwright_instance = await async_playwright().start()
-        _browser_singleton = await _playwright_instance.chromium.connect_over_cdp(BROWSER_CDP_URL)
+        cdp_url = BROWSER_CDP_URL
+        # Chromium DevTools rejects Host headers that are not an IP literal or
+        # localhost (DNS-rebinding protection) -> "500 Host header is
+        # specified and is not an IP address or localhost". A docker service
+        # name like http://browser:9222 therefore fails. Resolve the hostname
+        # to its (container) IP at connect time so the Host header is an IP;
+        # resolving lazily (not at module import) keeps the resolution current
+        # across sidecar restarts that change the container IP.
+        import socket
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(cdp_url)
+        if parts.hostname and parts.hostname not in ("localhost", "127.0.0.1", "::1"):
+            try:
+                ip = socket.gethostbyname(parts.hostname)
+                port = f":{parts.port}" if parts.port else ""
+                cdp_url = f"{parts.scheme}://{ip}{port}"
+            except socket.gaierror:
+                pass  # already an IP literal or unresolvable: use as-is
+        _browser_singleton = await _playwright_instance.chromium.connect_over_cdp(cdp_url)
         return _browser_singleton
 
 
