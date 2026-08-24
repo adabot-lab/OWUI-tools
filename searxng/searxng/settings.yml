@@ -4,6 +4,7 @@ use_default_settings:
     keep_only:
       - duckduckgo
       - wikipedia
+      - mwmbl
 
 server:
   public_instance: false
@@ -172,3 +173,26 @@ engines:
     engine: wikipedia
     shortcut: wp
     disabled: false
+
+  # mwmbl: keyless, no bot-detection (cannot 429/CAPTCHA); thin+dated results
+  # -> weight 0.5 keeps ddg primary. Upstream ships disabled: true, the stanza
+  # below activates it.
+  - name: mwmbl
+    engine: mwmbl
+    shortcut: mwm
+    disabled: false
+    weight: 0.5
+
+  # --- Brave Search API: OFF by default ---------------------------------
+  # The docker-compose.yml entrypoint wrapper uncomments this stanza and
+  # injects the real key at container start, but ONLY when the environment
+  # variable SEARXNG_BRAVE_API_KEY is non-empty. With no key set, everything
+  # below stays inert comments and the engine set is exactly
+  # [duckduckgo, wikipedia, mwmbl]. The generated runtime settings live at
+  # /run/searxng/settings.yml INSIDE the container - the bind-mounted repo
+  # directory is never modified.
+  #BRAVE# - name: braveapi
+  #BRAVE#   engine: braveapi
+  #BRAVE#   shortcut: br
+  #BRAVE#   api_key: "__BRAVE_API_KEY__"
+  #BRAVE#   disabled: false
