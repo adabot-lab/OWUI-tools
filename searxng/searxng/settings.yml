@@ -2,11 +2,8 @@
 use_default_settings:
   engines:
     keep_only:
-      - google
       - duckduckgo
-      - bing
-      - brave
-      - startpage
+      - wikipedia
 
 server:
   public_instance: false
@@ -166,36 +163,12 @@ outgoing:
 
 
 engines:
-
-
-  - name: bing
-    engine: bing
-    shortcut: bi
-    disabled: false
-    weight: 0.5
-
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
     disabled: false
 
-  - name: braveapi
-    engine: braveapi
-    # read https://docs.searxng.org/dev/engines/online/brave.html
-    api_key: ""
-    inactive: true
-
-  - name: brave
-    engine: brave
-    shortcut: br
-    time_range_support: true
-    paging: true
-    categories: [general, web]
-    brave_category: search
-    # brave_spellcheck: true
-
-  - name: google
-    engine: google
-    shortcut: go
-    timeout: 10.0
-    weight: 2.0
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
