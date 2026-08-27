@@ -1,0 +1,20 @@
+# Environment files
+.env
+.env.*
+*.env
+
+# Allow examples
+!.env.example
+
+# Himalaya live config + credentials
+# Ignore everything in config/ EXCEPT the example template
+config/*
+!config/config.example.toml
+
+# Password files
+password
+password.*
+*.password
+
+# Downloaded attachments / data
+data/

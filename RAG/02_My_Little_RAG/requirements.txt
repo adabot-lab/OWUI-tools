@@ -1,6 +1,6 @@
 # Core dependencies for retrieval API
 qdrant-client>=1.9.0
-mcp>=1.0.0
+mcp>=1.0.0,<2.0.0
 
 # Web framework
 fastapi>=0.100.0
@@ -17,5 +17,5 @@ python-dotenv>=1.0.0
 
 # Langchain for embedding functions
 langchain-community>=0.0.0
-langchain-openai>=0.0.0
+langchain-openai==1.4.1
 langchain-ollama>=0.0.0

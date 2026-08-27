@@ -12,6 +12,11 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
 
 # Configuration
+# Deliberately re-declared in RAG/01_My_Little_RAG_Ingestion/config.py (self-contained
+# subtools, no shared config module). When changing a default here, change the mirror
+# there and keep both aligned. The OPENAI_BASE_URL/OPENAI_RETRIEVAL_URL split is
+# intentional divergence — see the OpenAI comment below.
+
 # Qdrant
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
@@ -25,15 +30,37 @@ EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "CPP_snowflake-embed-l-
 VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", 1024))  # Embedding dimension
 
 # OpenAI
+# Retrieval prefers OPENAI_RETRIEVAL_URL (a dedicated embedding host) and falls
+# back to OPENAI_BASE_URL if unset. Reason for the split: BASE_URL may co-host
+# the main LLM, and loading the embedding model there would UNLOAD it. A
+# dedicated retrieval host avoids that. Ingestion (RAG/01) uses BASE_URL only,
+# where batch unloading of the main LLM is acceptable.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-#OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://llamacpp.legally-berlin.de/v1")
-OPENAI_BASE_URL = os.getenv("OPENAI_RETRIVAL_URL")
+OPENAI_BASE_URL = os.getenv("OPENAI_RETRIEVAL_URL") or os.getenv("OPENAI_BASE_URL")
 
 # Ollama
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 
 # BM25 configuration
 BM25_LANGUAGE = os.getenv("BM25_LANGUAGE", "german")
+
+
+def validate_required_env():
+    required = ["QDRANT_HOST", "QDRANT_COLLECTION", "EMBEDDING_MODEL_NAME", "PROVIDER"]
+    provider = os.environ.get("PROVIDER", "").lower()
+    if provider == "openai":
+        required.append("OPENAI_BASE_URL")
+    elif provider == "ollama":
+        required.append("OLLAMA_BASE_URL")
+    missing = [v for v in required if not os.environ.get(v)]
+    if missing:
+        raise SystemExit(
+            f"[RAG/02 retrieval] Missing required environment variables: {', '.join(missing)}\n"
+            "Copy RAG/.env.example to the compose project .env and set the listed variables."
+        )
+
+
+validate_required_env()
 
 def _build_bm25_query(text: str):
     options = {"language": BM25_LANGUAGE.lower()} if BM25_LANGUAGE and BM25_LANGUAGE.lower() != "none" else None
@@ -64,7 +91,7 @@ class RetrievalEngine:
     """Class that encapsulates all retrieval functionality"""
 
     def __init__(self):
-        self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=30)
         self.embedding_func = get_embedding_function()
 
     def list_collections(self) -> List[Dict[str, Any]]:
@@ -144,7 +171,7 @@ class RetrievalEngine:
         query: str,
         top_k: int = 10,
         min_score: float = 0.0,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> List[dict]:
         """
         General hybrid search across all documents in the Qdrant collection.
@@ -188,6 +215,7 @@ class RetrievalEngine:
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     query=dense_vector,
+                    using="dense",
                     query_filter=None,
                     limit=top_k,
                     with_payload=True
@@ -204,6 +232,9 @@ class RetrievalEngine:
                 for idx, point in enumerate(search_result)
             ]
 
+            if min_score > 0:
+                results = [r for r in results if r["score"] >= min_score]
+
             return results
 
         except Exception as e:
@@ -216,7 +247,7 @@ class RetrievalEngine:
         file_name: str,
         top_k: int = 10,
         min_score: float = 0.0,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> List[dict]:
         """
         Hybrid search within a specific file in the Qdrant collection.
@@ -272,6 +303,8 @@ class RetrievalEngine:
                 search_result = self.client.query_points(
                     collection_name=collection_to_search,
                     query=dense_vector,
+                    using="dense",
+                    query_filter=file_filter,
                     limit=top_k,
                     with_payload=True
                 ).points
@@ -287,6 +320,9 @@ class RetrievalEngine:
                 for idx, point in enumerate(search_result)
             ]
 
+            if min_score > 0:
+                results = [r for r in results if r["score"] >= min_score]
+
             return results
 
         except Exception as e:
@@ -298,7 +334,7 @@ class RetrievalEngine:
         query: str,
         top_k: int = 10,
         min_score: float = 0.0,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> List[dict]:
         """
         Text-only search using native BM25 sparse vectors across all documents in the Qdrant collection.
@@ -334,6 +370,9 @@ class RetrievalEngine:
                 for idx, point in enumerate(search_result)
             ]
 
+            if min_score > 0:
+                results = [r for r in results if r["score"] >= min_score]
+
             return results
 
         except Exception as e:
@@ -346,7 +385,7 @@ class RetrievalEngine:
         file_name: str,
         top_k: int = 10,
         min_score: float = 0.0,
-        collection_name: str = None
+        collection_name: Optional[str] = None
     ) -> List[dict]:
         """
         Text-only search using native BM25 sparse vectors within a specific file in the Qdrant collection.
@@ -392,6 +431,9 @@ class RetrievalEngine:
                 }
                 for idx, point in enumerate(search_result)
             ]
+
+            if min_score > 0:
+                results = [r for r in results if r["score"] >= min_score]
 
             return results
 

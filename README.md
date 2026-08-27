@@ -4,7 +4,6 @@ Collection of Tools and Services for OpenWebUI with docker-compose.yml and setti
 
 ## Tools
 
-- **websearch** - Web search and page fetch functionality with Google, DuckDuckGo, and SearxNG support
 - **RAG/01_My_Little_RAG_Ingestion** - RAG ingestion 
 - **RAG/02_My_Little_RAG** - RAG retrieval 
 - **RAG/03_My_Litte_RAG_Laws** - returns legislative text (only tested with german laws)
@@ -71,7 +70,6 @@ The `docker-compose.yml` from this repository should be at `/home/user/OWUI-tool
 Copy the relevant `.env.example` files from each tool's directory to `.env` and configure the required environment variables:
 
 ```bash
-cp websearch/.env.example websearch/.env
 cp RAG/.env.example RAG/.env
 # Copy and configure other .env files as needed
 ```
@@ -107,7 +105,7 @@ Comment out the tools you don't need in the main `docker-compose.yml`:
 include:
 
 # web search
-  - path: ./websearch/docker-compose.yml # :8011
+  - path: ./websearch-mcp/docker-compose.yml
 
 # RAG
   - path: ./RAG/02_My_Little_RAG/docker-compose.yml # 8020
@@ -144,7 +142,7 @@ docker-compose down
 
 In Open WebUI, go to **Admin Panel** -> **Settings** -> **Integrations**. Hit the **+** next to **Manage Tool Servers**.
 
-Set **Type** to **OpenAPI**. Enter a **name** (e.g., `web-search`) and a **description** (e.g., `search the www and fetch websites`). Enter the **URL** in format `http://docker_container_name:port`, e.g., for websearch `http://websearch-fastapi:8000`. Leave **Auth** empty. Click the button next to URL for reloading. Make sure the tool is activated (button green). Click **save**.
+Set **Type** to **OpenAPI**. Enter a **name** (e.g., `web-search`) and a **description** (e.g., `search the www and fetch websites`). Enter the **URL** in format `http://docker_container_name:port`, e.g., for websearch-mcp `http://websearch-mcp:8000`. Leave **Auth** empty. Click the button next to URL for reloading. Make sure the tool is activated (button green). Click **save**.
 
 ## Usage in chat
 
@@ -157,7 +155,6 @@ At **Settings** -> **Integrations**, click the **+** next to **Open Terminal**. 
 In Chats, click the cloud symbol next to the microphone symbol and select Openterminal.
 
 ## Default Ports
-- **websearch:** port 8011
 - **RAG/02_My_Little_RAG:** port 8020
 - **RAG/03_My_Litte_RAG_Laws:** 8023
 - **RAG/04_My_Little_RAG_qdrant:** port 6777

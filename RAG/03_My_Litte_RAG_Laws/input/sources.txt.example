@@ -1,0 +1,42 @@
+# Law Pipeline — Source URLs
+# ============================
+# Add one URL per line. Empty lines and lines starting with # are ignored.
+#
+# The fetcher auto-detects the source type from the URL:
+#
+#   1. gesetze-im-internet.de (GII XML)
+#      URL format: https://www.gesetze-im-internet.de/<slug>/xml.zip
+#      Example:     https://www.gesetze-im-internet.de/vgv_2017/xml.zip
+#      Returns: ZIP with one XML file using the GII norm DTD.
+#
+#   2. verwaltungsvorschriften-im-internet.de (VV HTML)
+#      URL format: https://www.verwaltungsvorschriften-im-internet.de/<doc>.htm
+#      Returns: Semi-structured HTML with paragraph markers.
+#
+#   3. eur-lex.europa.eu (EUR-Lex CELLAR)
+#      URL format: https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:<CELEX_NUMBER>
+#      Example:     https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02014L0024-20260101
+#      The fetcher auto-rewrites this to the CELLAR API at publications.europa.eu
+#      to bypass the EUR-Lex WAF block.
+#
+#   4. gesetze.berlin.de (BSBE XML)
+#      URL format: https://gesetze.berlin.de/perma?j=<LAW_ABBREVIATION>
+#      Example:     https://gesetze.berlin.de/perma?j=VergabeG_BE
+#      Returns: GII norm DTD XML (uses perma redirect + AIZ ZIP download).
+#      Requires HTTP/2. The law abbreviation (j=) maps to the law's jurisdiction ID.
+#
+# Add your URLs below this line:
+
+# --- Examples (one per supported source type) ---
+
+# GII XML
+# https://www.gesetze-im-internet.de/vgv_2017/xml.zip
+
+# VV HTML
+# https://www.verwaltungsvorschriften-im-internet.de/example_doc.htm
+
+# EUR-Lex (CELLAR)
+# https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:02016R0679-20160504
+
+# BSBE (gesetze.berlin.de, requires HTTP/2)
+# https://gesetze.berlin.de/perma?j=VergabeG_BE

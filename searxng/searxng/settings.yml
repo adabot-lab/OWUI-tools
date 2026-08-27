@@ -2,16 +2,14 @@
 use_default_settings:
   engines:
     keep_only:
-      - google
       - duckduckgo
-      - bing
-      - brave
-      - startpage
+      - wikipedia
+      - mwmbl
 
 server:
   public_instance: false
   # base_url is defined in the SEARXNG_BASE_URL environment variable, see .env and docker-compose.yml
-  secret_key: "1a2b3c4d5e7f8g901234567890"  # change this!
+  secret_key: "ultrasecretkey"  # overwritten by SEARXNG_SECRET env (docker-compose.yml); SearXNG refuses to boot on this placeholder
   limiter: false  # enable this when running the instance for a public usage on the internet
   image_proxy: true
 
@@ -166,36 +164,35 @@ outgoing:
 
 
 engines:
-
-
-  - name: bing
-    engine: bing
-    shortcut: bi
-    disabled: false
-    weight: 0.5
-
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
     disabled: false
 
-  - name: braveapi
-    engine: braveapi
-    # read https://docs.searxng.org/dev/engines/online/brave.html
-    api_key: ""
-    inactive: true
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
 
-  - name: brave
-    engine: brave
-    shortcut: br
-    time_range_support: true
-    paging: true
-    categories: [general, web]
-    brave_category: search
-    # brave_spellcheck: true
+  # mwmbl: keyless, no bot-detection (cannot 429/CAPTCHA); thin+dated results
+  # -> weight 0.5 keeps ddg primary. Upstream ships disabled: true, the stanza
+  # below activates it.
+  - name: mwmbl
+    engine: mwmbl
+    shortcut: mwm
+    disabled: false
+    weight: 0.5
 
-  - name: google
-    engine: google
-    shortcut: go
-    timeout: 10.0
-    weight: 2.0
+  # --- Brave Search API: OFF by default ---------------------------------
+  # The docker-compose.yml entrypoint wrapper uncomments this stanza and
+  # injects the real key at container start, but ONLY when the environment
+  # variable SEARXNG_BRAVE_API_KEY is non-empty. With no key set, everything
+  # below stays inert comments and the engine set is exactly
+  # [duckduckgo, wikipedia, mwmbl]. The generated runtime settings live at
+  # /run/searxng/settings.yml INSIDE the container - the bind-mounted repo
+  # directory is never modified.
+  #BRAVE# - name: braveapi
+  #BRAVE#   engine: braveapi
+  #BRAVE#   shortcut: br
+  #BRAVE#   api_key: "__BRAVE_API_KEY__"
+  #BRAVE#   disabled: false

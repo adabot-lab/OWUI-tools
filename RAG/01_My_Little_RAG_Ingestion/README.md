@@ -117,7 +117,7 @@ Documents are intelligently chunked based on their structure:
 **Additional features:**
 - YAML front matter is automatically removed before chunking
 - Single extremely long sentences (> 600 tokens) are split word-by-word as a fallback
-- MIN_CHUNK_SIZE (default: 200), MAX_CHUNK_SIZE (default: 600), and CHUNK_OVERLAP can be configured via environment variables
+- MIN_CHUNK_SIZE (default: 200), MAX_CHUNK_SIZE (default: 600), and CHUNK_OVERLAP (reserved, not yet implemented) can be configured via environment variables
 
 ## Incremental Processing
 

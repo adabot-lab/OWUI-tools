@@ -1,18 +1,28 @@
 services:
   legal-paragraph-api:
     build: .
-#      context: /home/shadow01/ollama-tools/01_RAG/02b_My_Litte_RAG_Laws
-#      dockerfile: Dockerfile
     container_name: my_little_rag_law_retrieval
-#    ports:
-#      - "8023:8000"
+    ports:
+      - "9210:8000"
     volumes:
       - ./input:/app/input
+      - ./data:/app/data
     environment:
-      - TRANSPORT_TYPE=openapi
-      - LEGAL_DOCUMENTS_DIR=input
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      # Data loading mode:
+      #   serve — start with existing DB (default)
+      #   fetch — refresh: nuke all + re-download if DB exists;
+      #          else use cache if available, else download fresh
+      #   local — nuke DB, parse from data/cache/, populate, then serve
+      - FETCH_MODE=${FETCH_MODE}
+      - LEGAL_SOURCES_FILE=${LEGAL_SOURCES_FILE}
+      - LEGAL_DB_PATH=${LEGAL_DB_PATH}
     env_file:
-      - LAW.env
+      - .env
     restart: unless-stopped
     networks:
       - ollama-tools
+
+#networks:
+#  ollama-tools:

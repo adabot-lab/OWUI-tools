@@ -4,12 +4,11 @@ services:
     container_name: websearch-mcp
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9200:9200"
+      - "0.0.0.0:9200:9200"
     environment:
       - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
       - SEARXNG_TIMEOUT=${SEARXNG_TIMEOUT:-15}
       - USE_SEARXNG_SEARCH=${USE_SEARXNG_SEARCH:-yes}
-      - USE_DUCKDUCKGO_SEARCH=${USE_DUCKDUCKGO_SEARCH:-no}
       - TIKA_SERVER_URL=${TIKA_SERVER_URL:-http://tika:9998}
       - PAGE_FETCH_TIMEOUT=${PAGE_FETCH_TIMEOUT:-15}
       - PAGE_MAX_CONTENT_LENGTH=${PAGE_MAX_CONTENT_LENGTH:-50000}
@@ -26,3 +25,29 @@ services:
         max-size: "5m"
         max-file: "3"
 
+  # Tier-2 stealth-fetch sidecar: chromium exposing CDP, docker-internal only.
+  # SECURITY: no ports: publish — CDP is unauthenticated and must never reach the LAN.
+  # Image ENTRYPOINT is "chromium-browser --headless"; the command list appends to it.
+  browser:
+    image: zenika/alpine-chrome:latest
+    container_name: browser
+    init: true
+    command:
+      - --remote-debugging-port=9222
+      - --remote-debugging-address=0.0.0.0
+      - --user-data-dir=/home/chromium/profile
+      - --no-sandbox
+      - --disable-gpu
+      - --disable-dev-shm-usage
+    mem_limit: 768m
+    cpus: 1.0
+    volumes:
+      - ./browser-profile:/home/chromium/profile
+    restart: unless-stopped
+    networks:
+      - ollama-tools
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"

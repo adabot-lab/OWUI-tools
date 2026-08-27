@@ -1,0 +1,10 @@
+data/
+__pycache__/
+*.pyc
+.env
+*.db
+
+# Local source list — contains user-curated URLs, never commit.
+# Template (sources.txt.example) IS tracked for format reference.
+input/sources.txt
+!input/sources.txt.example

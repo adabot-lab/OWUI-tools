@@ -1,14 +1,14 @@
 model_list:
   # ==================== LOCAL MODELS ====================
 
-  # LlamaCPP - OpenAI-compatible local server
-  - model_name: "llamaCPP/*"
-    litellm_params:
-      model: "openai/*"  # Replace with your actual model name
-      api_base: os.environ/LLAMACPP_API_BASE
-      api_key: "dummy-key"  # LlamaCPP may not require key
-    model_info:
-      mode: chat
+#  # LlamaCPP - OpenAI-compatible local server
+#  - model_name: "llamaCPP/*"
+#    litellm_params:
+#      model: "openai/*"  # Replace with your actual model name
+#      api_base: os.environ/LLAMACPP_API_BASE
+#      api_key: "dummy-key"  # LlamaCPP may not require key
+#    model_info:
+#      mode: chat
 
   # Ollama - Local models
 #  - model_name: ollama-llama3
@@ -52,31 +52,90 @@ model_list:
       model: zai/glm-4.7
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      input_cost_per_token: 6e-07
+      output_cost_per_token: 2.2e-06
+      cache_read_input_token_cost: 1.1e-07
 
   - model_name: zai-glm-5
     litellm_params:
       model: zai/glm-5
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
+      input_cost_per_token: 1e-06
+      output_cost_per_token: 3.2e-06
+      cache_read_input_token_cost: 2e-07
 
   - model_name: zai-glm-5-turbo
     litellm_params:
       model: zai/glm-5-turbo
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
+      input_cost_per_token: 1.2e-06
+      output_cost_per_token: 4e-06
+      cache_read_input_token_cost: 2.4e-07
 
   - model_name: zai-glm-5.1
     litellm_params:
-      model: zai/glm-5-turbo
+      model: zai/glm-5.1
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      input_cost_per_token: 1.4e-06
+      output_cost_per_token: 4.4e-06
+      cache_read_input_token_cost: 2.6e-07
 
+  - model_name: zai-glm-5.2
+    litellm_params:
+      model: zai/glm-5.2
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      input_cost_per_token: 0.0000014        # $1.40 / 1M
+      output_cost_per_token: 0.0000044       # $4.40 / 1M
+      cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached input
 
+  - model_name: zai-glm-5.3
+    litellm_params:
+      model: zai/glm-5.3
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      input_cost_per_token: 0.0000014        # $1.40 / 1M
+      output_cost_per_token: 0.0000044       # $4.40 / 1M
+      cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached input
+
+  # GLM-5.3-Flash: natively multimodal (text+image in), 1M ctx, released 2026-08-26.
+  # model_name kept bare (no zai- prefix): task spec requires id "glm-5.3-flash".
+  # Pricing = LIST prices (docs.z.ai/guides/overview/pricing, 2026-08-27); 50% promo
+  # runs until 2026-09-09 (UTC+8) — list prices encoded so spend logs stay correct after.
+  - model_name: glm-5.3-flash
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      input_cost_per_token: 0.00000015       # $0.15 / 1M (promo $0.075 until 2026-09-09)
+      output_cost_per_token: 0.0000005       # $0.50 / 1M (promo $0.25)
+      cache_read_input_token_cost: 0.00000003  # $0.03 / 1M cached (promo $0.015)
   # ==================== OPENROUTER ====================
 
-  - model_name: openrouter-deepseek-v3.2-exp(0.27/0.4)
+  - model_name: flux-openrouter
     litellm_params:
-      model: openrouter/deepseek/deepseek-v3.2-exp
+      model: openrouter/black-forest-labs/flux.2-klein-4b
+      api_key: os.environ/OPENROUTER_API_KEY
+      drop_params: true
+      extra_body:
+        modalities: ["image"]
+
+  - model_name: openrouter-deepseek-v4-flash(0.14/0.28)
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter-deepseek-v4-pro(1.74/3.48)
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-pro
       api_key: os.environ/OPENROUTER_API_KEY
 
   - model_name: openrouter-gpt-oss-120b(0.039/0.19)
@@ -84,19 +143,44 @@ model_list:
       model: openrouter/openai/gpt-oss-120b
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: openrouter-gpt-oss-20b(0.03/0.14)
-    litellm_params:
-      model: openrouter/openai/gpt-oss-20b
-      api_key: os.environ/OPENROUTER_API_KEY
-
   - model_name: openrouter-grok-4.1-fast(0.2/0.5)
     litellm_params:
       model: openrouter/x-ai/grok-4.1-fast
       api_key: os.environ/OPENROUTER_API_KEY
 
+  - model_name: openrouter-kimi-K2.5(0.45/2.20)
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter-kimi-K2.6(0.7448/4.655)
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.6
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter-minimax-m2.7(0.3/1.20)
+    litellm_params:
+      model: openrouter/minimax/minimax-m2.7
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter-xiaomi-mimo-v2.5(0.4/2)
+    litellm_params:
+      model: openrouter/xiaomi/mimo-v2.5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter-xiaomi-mimo-v2.5-pro(1/3)
+    litellm_params:
+      model: openrouter/xiaomi/mimo-v2.5-pro
+      api_key: os.environ/OPENROUTER_API_KEY
+
   - model_name: openrouter-z-ai/glm-4.7-flash(0.06/0.4)
     litellm_params:
       model: openrouter/z-ai/glm-4.7-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter-z-ai/glm-5.1(1.05/3.50)
+    litellm_params:
+      model: openrouter/z-ai/glm-5.1
       api_key: os.environ/OPENROUTER_API_KEY
 
   - model_name: openrouter-zai-glm-4.5-air-free
@@ -109,26 +193,31 @@ model_list:
       model: openrouter/z-ai/glm-4.7
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: openrouter-kimi-K2.5(0.45/2.20)
-    litellm_params:
-      model: openrouter/moonshotai/kimi-k2.5
-      api_key: os.environ/OPENROUTER_API_KEY
-
-  - model_name: openrouter-minimax-m2.7(0.3/1.20)
-    litellm_params:
-      model: openrouter/minimax/minimax-m2.7
-      api_key: os.environ/OPENROUTER_API_KEY
-
   # ==================== DEEPSEEK ====================
+  # deepseek-chat and deepseek-reasoner are deprecated;
+  # both map to deepseek-v4-flash (non-thinking vs thinking mode).
+  # deepseek-v4-flash supports both modes via parameter.
 
-  - model_name: deepseek-chat(0.28/0.42)
+  - model_name: deepseek-v4-flash(0.14/0.28)
     litellm_params:
-      model: deepseek/deepseek-chat
+      model: deepseek/deepseek-v4-flash
       api_key: os.environ/DEEPSEEK_API_KEY
 
-  - model_name: deepseek-reasoner(0.28/0.42)
+  - model_name: deepseek-v4-pro(0.435/0.87)
     litellm_params:
-      model: deepseek/deepseek-reasoner
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # Experimental vision model (docs: https://api-docs.deepseek.com/guides/vision).
+  # No pricing suffix: experimental, pricing not yet published — SpendLogs will show $0 until costs are added.
+  # Routed via the openai/ provider, NOT deepseek/: litellm 1.93.0's deepseek
+  # transformation flattens message content lists to plain strings (drops image
+  # parts, vision arrives empty); DeepSeek's API is OpenAI-compatible, and the
+  # openai/ path passes content-part lists through unchanged.
+  - model_name: deepseek-v4-flash-vision-exp
+    litellm_params:
+      model: openai/deepseek-v4-flash-vision-exp
+      api_base: https://api.deepseek.com/v1
       api_key: os.environ/DEEPSEEK_API_KEY
 
   # ==================== MISTRAL AI ====================
@@ -203,8 +292,28 @@ general_settings:
 
 # ==================== LITELLM SETTINGS ====================
 litellm_settings:
-    check_provider_endpoint: true
-  # Optional: Disable SSL verification for self-signed certificates
+    modify_params: true            # Auto-handle missing reasoning_content/thinking_blocks in multi-turn conversations
+    check_provider_endpoint: true   # Queries upstream provider's /models endpoint to resolve wildcards (e.g. openai/*)
+#    fallbacks:                      # When a model fails all retries, fall back to these alternatives
+#      - zai-glm-5.1: ["deepseek-v4-flash(0.14/0.28)"]
+#      - deepseek-v4-flash(0.14/0.28): ["openrouter-deepseek-v4-flash(0.14/0.28)"]
+#      - deepseek-v4-pro(0.435/0.87): ["openrouter-deepseek-v4-flash(0.14/0.28)"]
+    num_retries: 3                  # Default number of retries per request before giving up
+    request_timeout: 300            # Max total time (seconds) for any request before timing out
+    cooldown_time: 600              # how long to skip a deployment after too many failures
+    retry_policy:                   # Per-request: how many times to retry specific error types
+      TimeoutErrorRetries: 3        #   Retry x times on timeout before moving on
+      RateLimitErrorRetries: 3      #   Retry x times on rate limit (429) before moving on
+    allowed_fails_policy:           # Per-deployment: total failures across all requests before cooldown
+      TimeoutErrorAllowedFails: 5   #   x timeout errors → deployment goes into cooldown
+      RateLimitErrorAllowedFails: 5 #   x rate limit errors → deployment goes into cooldown
+
+## this is used to strip specific words from system prompts
+  # ^ format: <filename_without_.py>.<instance_variable_name>
+    callbacks: strip_hermes.strip_hermes_handler
+
+
+      # Optional: Disable SSL verification for self-signed certificates
   # ssl_verify: false
 
   # Optional: Enable caching

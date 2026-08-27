@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE dokumente [
+
+		<!ENTITY % xhtml-transitional PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+		%xhtml-transitional;
+
+        <!ELEMENT dokumente (norm)*>
+        <!ATTLIST dokumente
+                builddate CDATA #REQUIRED
+                doknr CDATA #REQUIRED>
+        <!ELEMENT norm (metadaten|textdaten)*>
+        <!ATTLIST norm
+                builddate CDATA #REQUIRED
+                doknr CDATA #REQUIRED>
+        <!ELEMENT metadaten (jurabk|amtabk?|ausfertigung-datum?|gueltigab?|gueltigbis?|dokumenttyp?|fundstelle?|gliederungsnr?|kurzue?|langue?|titel?|enbez?|gliederungseinheit?|zitiervorschlag?)*>
+        <!ELEMENT jurabk (#PCDATA)>
+        <!ELEMENT amtabk (#PCDATA)>
+        <!ELEMENT ausfertigung-datum (#PCDATA)>
+        <!ELEMENT gueltigab (#PCDATA)>
+        <!ELEMENT gueltigbis (#PCDATA)>
+        <!ELEMENT dokumenttyp (#PCDATA)>
+        <!ELEMENT fundstelle (#PCDATA)>
+        <!ELEMENT gliederungsnr (#PCDATA)>
+        <!ELEMENT kurzue (#PCDATA)>
+        <!ELEMENT langue (#PCDATA)>
+        <!ELEMENT titel (#PCDATA)>
+        <!ELEMENT enbez (#PCDATA)>
+        <!ELEMENT gliederungseinheit (gliederungsbez?, gliederungstitel?)>
+        <!ELEMENT gliederungsbez (#PCDATA)>
+        <!ELEMENT gliederungstitel (#PCDATA)>
+        <!ELEMENT zitiervorschlag (#PCDATA)>
+        <!ELEMENT textdaten ANY>
+        ]>
+
+<dokumente builddate="20260727180000" doknr="jlr-NNLBE00004DE4">
+
+<norm builddate="20260727180000" doknr="jlr-NNLBE00004DE4"><metadaten><jurabk>VergabeG BE 2020</jurabk><amtabk>BerlAVG</amtabk><ausfertigung-datum>22.04.2020</ausfertigung-datum><gueltigab>01.05.2020</gueltigab><gueltigbis/><dokumenttyp>Gesetz</dokumenttyp><fundstelle>GVBl. 2020, 276</fundstelle><gliederungsnr>7102-9</gliederungsnr><langue>Berliner Ausschreibungs- und Vergabegesetz (BerlAVG) vom 22. April 2020</langue><titel>Berliner Ausschreibungs- und Vergabegesetz (BerlAVG) vom 22. April 2020</titel></metadaten><textdaten><div class="jnhtml"><table class="standangaben" width="100%"><colgroup><col width="10%"/><col width="90%"/></colgroup><tr><td class="StandangabeStand">Stand: </td><td>letzte berücksichtigte Änderung: mehrfach geändert sowie § 19 aufgehoben durch Artikel 1 des Gesetzes vom 02.07.2026 (GVBl. S. 538)</td></tr></table></div></textdaten></norm>
+
+<norm builddate="20260727180000" doknr="jlr-NNLBE00004DE4NN00000000026"><metadaten><jurabk>VergabeG BE 2020</jurabk><amtabk>BerlAVG</amtabk><ausfertigung-datum>02.07.2026</ausfertigung-datum><gueltigab>16.07.2026</gueltigab><gueltigbis/><dokumenttyp>Gesetz</dokumenttyp><gliederungsnr>7102-9</gliederungsnr><zitiervorschlag>§ 1 BerlAVG in der Fassung vom 02.07.2026</zitiervorschlag><enbez>§ 1</enbez></metadaten><textdaten><h4 style="text-align: center; font-weight: bold;font-size: 100%; font-family: Arial, Helvetica, Sans-Serif;">§ 1<br/>Zweck des Gesetzes</h4><p><a name="P1-A1"/>(1) Zweck des Gesetzes ist es, die Rahmenbedingungen für kleine und mittelständische Unternehmen im Bereich der öffentlichen Auftragsvergabe zu verbessern und soziale, beschäftigungspolitische sowie umweltbezogene Aspekte bei der Vergabe öffentlicher Aufträge im Sinne der §§ 103 und 104 des Gesetzes gegen Wettbewerbsbeschränkungen zu fördern.</p><p><a name="P1-A2"/>(2) Die Umsetzung sozialer, beschäftigungspolitischer und umweltbezogener Aspekte erfolgt auf der Grundlage von Vergabebestimmungen gemäß Abschnitt 2 sowie Ausführungsbedingungen gemäß Abschnitt 3 dieses Gesetzes.</p></textdaten></norm>
+
+<norm builddate="20260727180000" doknr="jlr-NNLBE00004DE4NN00000000027"><metadaten><jurabk>VergabeG BE 2020</jurabk><amtabk>BerlAVG</amtabk><ausfertigung-datum>02.07.2026</ausfertigung-datum><gueltigab>16.07.2026</gueltigab><gueltigbis/><dokumenttyp>Gesetz</dokumenttyp><gliederungsnr>7102-9</gliederungsnr><zitiervorschlag>§ 2 BerlAVG in der Fassung vom 02.07.2026</zitiervorschlag><enbez>§ 2</enbez></metadaten><textdaten><h4 style="text-align: center; font-weight: bold;font-size: 100%; font-family: Arial, Helvetica, Sans-Serif;">§ 2<br/>Persönlicher Anwendungsbereich</h4><p><a name="P2-A1"/>(1) Das Land Berlin als öffentlicher Auftraggeber gemäß § 99 Nummer 1 des Gesetzes gegen Wettbewerbsbeschränkungen vergibt öffentliche Aufträge an geeignete Unternehmen nach Maßgabe der Abschnitte 2 bis 4 dieses Gesetzes.</p><p><a name="P2-A2"/>(2) Juristische Personen des öffentlichen Rechts gemäß § 99 Nummer 2 und 3 des Gesetzes gegen Wettbewerbsbeschränkungen, die dem Land Berlin zuzurechnen sind und die den Bestimmungen des § 55 der Landeshaushaltsordnung unterliegen, sowie Eigenbetriebe gemäß dem Eigenbetriebsgesetz, vergeben öffentliche Aufträge an geeignete Unternehmen nach Maßgabe der Abschnitte 3 und 4 dieses Gesetzes.</p></textdaten></norm>
+
+<norm builddate="20260727180000" doknr="jlr-NNLBE00004DE4NN00000000028"><metadaten><jurabk>VergabeG BE 2020</jurabk><amtabk>BerlAVG</amtabk><ausfertigung-datum>02.07.2026</ausfertigung-datum><gueltigab>16.07.2026</gueltigab><gueltigbis/><dokumenttyp>Gesetz</dokumenttyp><gliederungsnr>7102-9</gliederungsnr><zitiervorschlag>§ 3 BerlAVG in der Fassung vom 02.07.2026</zitiervorschlag><enbez>§ 3</enbez></metadaten><textdaten><h4 style="text-align: center; font-weight: bold;font-size: 100%; font-family: Arial, Helvetica, Sans-Serif;">§ 3<br/>Sachlicher Anwendungsbereich</h4><p><a name="P3-A1"/>(1) Dieses Gesetz ist von den öffentlichen Auftraggebern gemäß § 2 innerhalb der auch insoweit geltenden Grenzen des persönlichen Anwendungsbereichs auf alle öffentlichen Aufträge und Rahmenvereinbarungen über Bauleistungen ab einem geschätzten Auftragswert von 500 000 Euro (ohne Umsatzsteuer) und auf alle öffentlichen Aufträge und Rahmenvereinbarungen über Liefer- und Dienstleistungen ab einem geschätzten Auftragswert in Höhe von 75 000 Euro (ohne Umsatzsteuer) anzuwenden, es sei denn,</p><dl><dt style="float: left; min-width: 1em;">1.</dt><dd style="margin-left: 2.5em; margin-bottom: 3ex;"><p> es handelt sich um vergaberechtsfreie Aufträge gemäß §§ 107, 109, 116, 117, 137, 140 sowie 145 des Gesetzes gegen Wettbewerbsbeschränkungen,</p></dd><dt style="float: left; min-width: 1em;">2.</dt><dd style="margin-left: 2.5em; margin-bottom: 3ex;"><p> der öffentliche Auftrag wird zur Ausübung zentraler Beschaffungstätigkeiten an eine zentrale Beschaffungsstelle im Sinne des § 120 Absatz 4 des Gesetzes gegen Wettbewerbsbeschränkungen oder im Rahmen einer öffentlich-rechtlichen Vereinbarung vergeben,</p></dd><dt style="float: left; min-width: 1em;">3.</dt><dd style="margin-left: 2.5em; margin-bottom: 3ex;"><p> der Auftraggeber muss die Vertragsbedingungen des Auftragnehmers anerkennen, um seinen Bedarf decken zu können,</p></dd></dl><br/></textdaten></norm>
+
+</dokumente>

@@ -9,8 +9,8 @@ services:
 
     entrypoint: >
       bash -c "
-        echo 'Running ingest_index.py with provider: ${PROVIDER:-openai}...';
-        PROVIDER=${PROVIDER:-openai} python ingest_index.py;
+        echo 'Running main.py with provider: ${PROVIDER:-openai}...';
+        PROVIDER=${PROVIDER:-openai} python main.py;
         echo 'Ingestion complete. Container will now exit.';
         exit 0
       "
@@ -29,7 +29,7 @@ services:
       # OpenAI-specific settings (only used when PROVIDER=openai)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
-      - OPENAI_RETRIVAL_URL=${OPENAI_RETRIVAL_URL}
+      - OPENAI_RETRIEVAL_URL=${OPENAI_RETRIEVAL_URL}
       # Ollama-specific settings (only used when PROVIDER=ollama)
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       # Application path
@@ -42,6 +42,8 @@ services:
       - FORCE_REINDEX=false
       # BM25 text search language
       - BM25_LANGUAGE=${BM25_LANGUAGE:-german}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - ollama-tools
 

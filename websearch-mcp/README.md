@@ -8,7 +8,7 @@ Uses the MCP Streamable HTTP protocol (spec version 2025-03-26) — the current 
 
 Exposes three MCP tools that Open WebUI can call directly:
 
-- **web_search** — queries SearXNG and/or DuckDuckGo, returns ranked results with title, URL, and snippet
+- **web_search** — queries SearXNG, returns ranked results with title, URL, and snippet
 - **fetch_page** — retrieves a URL, strips boilerplate, returns clean text content
 - **health_check** — reports backend availability (which search engines are configured)
 
@@ -22,16 +22,15 @@ Exposes three MCP tools that Open WebUI can call directly:
 | Container port | 8000 | 9200 |
 | Python | 3.11 | 3.13 |
 
-The MCP version drops Google PSE in favor of a simpler, self-hosted-only setup (SearXNG + DuckDuckGo). No API keys required.
+The MCP version drops Google PSE in favor of a simpler, self-hosted-only setup (SearXNG). No API keys required.
 
 ## Search engines
 
 | Engine | Needs API key | Notes |
 |---|---|---|
 | **SearXNG** | No | Self-hosted metasearch, aggregates Google/Bing/Brave/etc. |
-| **DuckDuckGo** | No | Direct HTML scrape, no key required |
 
-Both enabled by default. Disable individually via env vars.
+Enabled by default. Disable via `USE_SEARXNG_SEARCH=no`.
 
 ## Page content extraction
 
@@ -51,7 +50,6 @@ Copy `.env.example` to `.env` and adjust. Key variables:
 |---|---|---|
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG instance URL |
 | `USE_SEARXNG_SEARCH` | `yes` | Enable SearXNG |
-| `USE_DUCKDUCKGO_SEARCH` | `no` | Enable DuckDuckGo |
 | `TIKA_SERVER_URL` | `http://tika:9998` | Tika server URL (empty = disabled) |
 | `PAGE_FETCH_TIMEOUT` | `15` | Fetch timeout in seconds |
 | `PAGE_MAX_CONTENT_LENGTH` | `50000` | Max extracted text length |

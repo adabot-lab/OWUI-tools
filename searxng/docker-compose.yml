@@ -26,8 +26,28 @@ services:
     volumes:
       - ./searxng:/etc/searxng:rw
       - searxng-data:/var/cache/searxng:rw
+    # Brave Search API activation wrapper: when BRAVE_API_KEY (from .env) is
+    # non-empty, generate /run/searxng/settings.yml from the bind-mounted
+    # settings.yml (uncomment the #BRAVE# stanza, inject the key) and point
+    # SEARXNG_SETTINGS_PATH at it. The runtime file lives INSIDE the container,
+    # outside the ./searxng bind mount, so the repo directory is never touched.
+    # With an empty key nothing is generated and SearXNG boots straight from
+    # /etc/searxng/settings.yml with the engine set [duckduckgo, wikipedia,
+    # mwmbl]. Assumes the Brave key contains no sed-active characters
+    # (Brave keys are base62).
+    entrypoint: >-
+      sh -c 'if [ -n "$$SEARXNG_BRAVE_API_KEY" ]; then
+      mkdir -p /run/searxng
+      && sed -e "s|^  #BRAVE# |  |" -e "s|__BRAVE_API_KEY__|$$SEARXNG_BRAVE_API_KEY|"
+      /etc/searxng/settings.yml > /run/searxng/settings.yml
+      && cp /etc/searxng/limiter.toml /run/searxng/limiter.toml
+      && export SEARXNG_SETTINGS_PATH=/run/searxng/settings.yml;
+      fi;
+      exec /usr/local/searxng/entrypoint.sh'
     environment:
       - SEARXNG_BASE_URL=https://${SEARXNG_HOSTNAME:-localhost}/
+      - "SEARXNG_SECRET=${SEARXNG_SECRET:?SEARXNG_SECRET missing - generate with: openssl rand -hex 24 (see .env.example)}"
+      - SEARXNG_BRAVE_API_KEY=${BRAVE_API_KEY:-}
     logging:
       driver: "json-file"
       options:

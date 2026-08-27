@@ -1,0 +1,16 @@
+# himalaya v2 config (IMAP only, NO SMTP — draft-only server)
+[accounts.main]
+default = true
+email = "user@example.com"
+display-name = "Your Name"
+downloads-dir = "/data"
+# Bare authority defaults to implicit TLS (imaps://...:993).
+# For STARTTLS use: imap.server = "imap://imap.example.com:143"
+imap.server = "imap.example.com"
+imap.sasl.plain.username = "user@example.com"
+imap.sasl.plain.password.raw = "YOUR_PASSWORD_HERE"
+# For command-based auth use instead:
+# imap.sasl.plain.password.command = "pass show mail/example"
+
+# NO smtp.* section — SMTP deliberately omitted (send capability
+# structurally absent)

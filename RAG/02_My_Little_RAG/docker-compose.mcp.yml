@@ -1,0 +1,39 @@
+services:
+  my_little_rag-retrieval-mcp:
+    build: .
+    image: my_little_rag-retrieval:latest
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      - "8020:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      # mcp variant
+      - TRANSPORT_TYPE=mcp
+      # Qdrant Configuration
+      - QDRANT_HOST=${QDRANT_HOST}
+      - QDRANT_PORT=${QDRANT_PORT}
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION}
+      # Provider (set to 'ollama' to use Ollama, 'openai' for OpenAI-compatible services)
+      - PROVIDER=${PROVIDER:-openai}
+      # embedding
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME}
+      - VECTOR_SIZE=${VECTOR_SIZE}
+      # OpenAI-specific settings (only used when PROVIDER=openai)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - OPENAI_RETRIEVAL_URL=${OPENAI_RETRIEVAL_URL}
+      # Ollama-specific settings (only used when PROVIDER=ollama)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Application path
+      - APP_BASE_PATH=${APP_BASE_PATH}
+      # BM25 text search language
+      - BM25_LANGUAGE=${BM25_LANGUAGE:-german}
+    env_file:
+      - .env
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - ollama-tools
+

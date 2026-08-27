@@ -1,109 +1,95 @@
+"""Legal Paragraph Retrieval Service — MCP streamable HTTP entrypoint.
+
+Exposes three MCP tools: retrieve_paragraph, search_paragraphs, list_laws.
+Served via streamable HTTP at http://host:port/mcp (default port 8000).
+"""
 import os
-from fastapi import FastAPI
-from openapi_routes import router as openapi_router
 
-# Get the transport type from environment variable
-TRANSPORT_TYPE = os.getenv("TRANSPORT_TYPE", "openapi").lower()  # Default to openapi for legal api
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
-# Import required modules
-from legal_retrieval_engine import LegalRetrievalEngine
+from legal_engine import LegalEngine
 
-# Conditionally create and run the appropriate server based on TRANSPORT_TYPE
-if TRANSPORT_TYPE == "mcp":
-    # Only MCP mode: Run MCP server directly
-    from mcp.server.fastmcp import FastMCP
+# --- Configuration via environment ---
+HOST = os.getenv("MCP_HOST", "0.0.0.0")
+PORT = int(os.getenv("MCP_PORT", "8000"))
 
-    # Initialize the legal retrieval engine
-    legal_engine = LegalRetrievalEngine()
-    print(f"Legal Paragraph Retrieval Service initialized with:")
+# Comma-separated list of allowed Host headers (DNS-rebinding protection).
+# In Docker, set this to the hostname/port clients will use to reach the
+# container, e.g. MCP_ALLOWED_HOSTS=my-lit.le.rag:8000
+_ALLOWED_HOSTS_RAW = os.getenv("MCP_ALLOWED_HOSTS", "")
+ALLOWED_HOSTS = [h.strip() for h in _ALLOWED_HOSTS_RAW.split(",") if h.strip()]
 
-    # Initialize the MCP server
-    mcp = FastMCP("Legal Paragraph Retrieval Service")
+# Initialize engine (creates/opens SQLite DB)
+engine = LegalEngine()
 
-    @mcp.tool()
-    def retrieve_paragraph(
-        law_name: str,
-        section_number: str
-    ) -> dict:
-        """
-        Retrieve a specific legal paragraph by law name and section number
-        Retrieves the exact paragraph content for a given law and section number.
-
-        Args:
-            law_name: Name of the law (e.g., "Gesetz gegen Wettbewerbsbeschränkungen")
-            section_number: Section number (e.g., "97" for §97)
-
-        Returns:
-            Dictionary with paragraph information or None if not found
-        """
-        return legal_engine.retrieve_paragraph(law_name, section_number)
-
-    @mcp.tool()
-    def list_laws() -> list[dict]:
-        """
-        List all available laws in the collection
-        Returns information about all the laws available in the system.
-
-        Returns:
-            List of law information including name and number of sections
-        """
-        return legal_engine.list_laws()
-
-    # Run the MCP server directly
-    app = mcp.streamable_http_app()
-elif TRANSPORT_TYPE == "openapi":
-    # Only OpenAPI mode: Run FastAPI server with OpenAPI endpoints
-    app = FastAPI(
-        title="Legal Paragraph Retrieval Service",
-        description="An API service to retrieve specific legal paragraphs (§) from German laws",
-        version="1.0.0"
+# --- Transport security ---
+# streamable_http_app() defaults to localhost-only (rejects non-localhost
+# with 421). For Docker or remote access, pass explicit allowed_hosts.
+if ALLOWED_HOSTS:
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=ALLOWED_HOSTS,
+        allowed_origins=[f"http://{h}" for h in ALLOWED_HOSTS],
     )
-
-    # Initialize the legal retrieval engine
-    legal_engine = LegalRetrievalEngine()
-    print(f"Legal Paragraph Retrieval Service initialized")
-
-    # Include OpenAPI routes
-    app.include_router(
-        openapi_router,
-        prefix="/api",
-        tags=["legal_paragraphs"]
-    )
-
 else:
-    # Default to OpenAPI mode when both is specified
-    app = FastAPI(
-        title="Legal Paragraph Retrieval Service",
-        description="An API service to retrieve specific legal paragraphs (§) from German laws",
-        version="1.0.0"
+    # No allowlist configured — disable DNS-rebinding protection so the
+    # server is reachable from any host. Suitable for trusted local/Docker
+    # networks. For public exposure, always set MCP_ALLOWED_HOSTS.
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
     )
 
-    # Initialize the legal retrieval engine
-    legal_engine = LegalRetrievalEngine()
-    print(f"Legal Paragraph Retrieval Service initialized")
+mcp = FastMCP(
+    "Legal Paragraph Retrieval Service",
+    host=HOST,
+    port=PORT,
+    transport_security=transport_security,
+)
 
-    # Include OpenAPI routes
-    app.include_router(
-        openapi_router,
-        prefix="/api",
-        tags=["legal_paragraphs"]
-    )
 
-    @app.get("/")
-    async def root():
-        return {
-            "message": "Legal Paragraph Retrieval Service - OpenAPI Mode",
-            "available_services": ["OpenAPI"],
-            "docs": "/docs",
-            "api_endpoint": "/api"
-        }
+@mcp.tool()
+def retrieve_paragraph(law_name: str, section_number: str) -> dict:
+    """
+    Retrieve a specific legal paragraph by law name and section number.
+    Returns the exact paragraph content for a given law and section.
+
+    On error, returns a dict with an 'error' key:
+      - error='law_not_found': the law doesn't exist in the database.
+        Includes 'available_laws' list.
+      - error='section_not_found': the law exists but the section doesn't.
+        Includes 'available_range' with min/max/total section numbers.
+
+    Args:
+        law_name: Law abbreviation (e.g., "VgV", "GWB") or full name.
+        section_number: Section number (e.g., "97" for section 97).
+    """
+    return engine.retrieve_paragraph(law_name, section_number)
+
+
+@mcp.tool()
+def search_paragraphs(query: str, limit: int = 20) -> list[dict]:
+    """
+    Full-text search across all legal paragraphs.
+    Returns ranked results with text snippets.
+
+    Args:
+        query: Search terms in German.
+        limit: Maximum results (default 20, max 100).
+    """
+    return engine.search_paragraphs(query, limit)
+
+
+@mcp.tool()
+def list_laws() -> list[dict]:
+    """List all available laws in the collection with section counts."""
+    return engine.list_laws()
+
+
+# Build the ASGI app
+app = mcp.streamable_http_app()
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=False
-    )
+    uvicorn.run("main:app", host=HOST, port=PORT, reload=False)

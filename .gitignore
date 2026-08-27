@@ -24,3 +24,31 @@ secrets.*
 # --- Local config overrides ---
 *.local
 config.local.*
+
+# --- Himalaya live config + credentials (himalaya-mcp) ---
+# Ignore everything in config/ EXCEPT the example template
+himalaya-mcp/config/*
+!himalaya-mcp/config/config.example.toml
+himalaya-mcp/password
+himalaya-mcp/password.*
+himalaya-mcp/data/
+
+# --- Backup files (.bak, .bak1, .bak2, ...) ---
+*.bak
+*.bak*
+
+# --- Local override files (local.*) ---
+local.*
+
+# --- Project data / build dirs ---
+RAG/04_My_Little_RAG_qdrant/qdrant_storage/
+RAG/01_My_Little_RAG_Ingestion/input/
+RAG/01_My_Little_RAG_Ingestion/chunks/
+RAG/01_My_Little_RAG_Ingestion/metadata/
+openterminal/data/
+python-bash/workspace/
+
+# --- Python bytecode / cache ---
+__pycache__/
+*.py[cod]
+*.pyo

@@ -10,27 +10,27 @@ router = APIRouter()
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 10
-    collection_name: str
+    collection_name: Optional[str] = None
 
 
 class SearchByFileRequest(BaseModel):
     query: str
     file_name: str = Field(..., description="The exact full path of the specific file to search within (required).")
     top_k: int = 10
-    collection_name: str
+    collection_name: Optional[str] = None
 
 
 class TextSearchRequest(BaseModel):
     query: str
     top_k: int = 10
-    collection_name: str
+    collection_name: Optional[str] = None
 
 
 class TextSearchByFileRequest(BaseModel):
     query: str
     file_name: str = Field(..., description="The exact full path of the specific file to search within (required).")
     top_k: int = 10
-    collection_name: str
+    collection_name: Optional[str] = None
 
 
 class CollectionInfo(BaseModel):
