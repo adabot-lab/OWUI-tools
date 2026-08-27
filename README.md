@@ -4,10 +4,12 @@ Collection of Tools and Services for OpenWebUI with docker-compose.yml and setti
 
 ## Tools
 
+- **websearch-mcp** - web search and page fetch MCP server ([SearXNG](https://github.com/searxng/searxng) backend, tiered stealth fetch)
 - **RAG/01_My_Little_RAG_Ingestion** - RAG ingestion 
 - **RAG/02_My_Little_RAG** - RAG retrieval 
 - **RAG/03_My_Litte_RAG_Laws** - returns legislative text (only tested with german laws)
 - **RAG/04_My_Little_RAG_qdrant** - docker-compose.yml for [Qdrant](https://github.com/qdrant/qdrant) (database for RAG tools)  
+- **himalaya-mcp** - email MCP server ([himalaya](https://github.com/pimalaya/himalaya) CLI in Docker): read + draft-only, **no send endpoint**
 - **openterminal** - docker-compose.yml for [Open Terminal](https://github.com/open-webui/open-terminal) (provides terminal access)
 - **tika** - docker-compose.yml for [Apache Tika](https://github.com/apache/tika) (document parser for websearch and Open Webui)
 - **searxng** - docker-compose.yml and settings for [SearXNG](https://github.com/searxng/searxng) (metasearch engine)
