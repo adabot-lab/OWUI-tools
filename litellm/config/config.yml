@@ -118,6 +118,56 @@ model_list:
       input_cost_per_token: 0.00000015       # $0.15 / 1M (promo $0.075 until 2026-09-09)
       output_cost_per_token: 0.0000005       # $0.50 / 1M (promo $0.25)
       cache_read_input_token_cost: 0.00000003  # $0.03 / 1M cached (promo $0.015)
+
+  # ==================== HERMES VIRTUAL MODELS ====================
+  # Virtual aliases for hermes profiles — swap backing model HERE, not in profiles.
+  # effort via extra_body: zai transform rejects top-level reasoning_effort (verified litellm 1.93.0).
+  - model_name: hermes-tasks
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
+
+  - model_name: hermes-plan
+    litellm_params:
+      model: zai/glm-5.3
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.0000014
+      output_cost_per_token: 0.0000044
+      cache_read_input_token_cost: 0.00000026
+
+  - model_name: hermes-execute
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
+
+  - model_name: hermes-vision
+    litellm_params:
+      model: openai/deepseek-v4-flash-vision-exp
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+      drop_params: true
+      # no reasoning setting; pricing = deepseek-v4-flash (user addendum 2026-08-29)
+      input_cost_per_token: 0.00000014
+      output_cost_per_token: 0.00000028
+
   # ==================== OPENROUTER ====================
 
   - model_name: flux-openrouter
@@ -209,16 +259,19 @@ model_list:
       api_key: os.environ/DEEPSEEK_API_KEY
 
   # Experimental vision model (docs: https://api-docs.deepseek.com/guides/vision).
-  # No pricing suffix: experimental, pricing not yet published — SpendLogs will show $0 until costs are added.
   # Routed via the openai/ provider, NOT deepseek/: litellm 1.93.0's deepseek
   # transformation flattens message content lists to plain strings (drops image
   # parts, vision arrives empty); DeepSeek's API is OpenAI-compatible, and the
   # openai/ path passes content-part lists through unchanged.
+  # Pricing = deepseek-v4-flash list prices (user addendum 2026-08-29) — spend logs
+  # were showing $0 while pricing was unpublished.
   - model_name: deepseek-v4-flash-vision-exp
     litellm_params:
       model: openai/deepseek-v4-flash-vision-exp
       api_base: https://api.deepseek.com/v1
       api_key: os.environ/DEEPSEEK_API_KEY
+      input_cost_per_token: 0.00000014       # $0.14 / 1M
+      output_cost_per_token: 0.00000028      # $0.28 / 1M
 
   # ==================== MISTRAL AI ====================
 
