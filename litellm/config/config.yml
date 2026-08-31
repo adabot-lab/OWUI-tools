@@ -164,9 +164,11 @@ model_list:
       api_base: https://api.deepseek.com/v1
       api_key: os.environ/DEEPSEEK_API_KEY
       drop_params: true
-      # no reasoning setting; pricing = deepseek-v4-flash (user addendum 2026-08-29)
-      input_cost_per_token: 0.00000014
-      output_cost_per_token: 0.00000028
+      # no reasoning setting; pricing = deepseek-v4-flash (v4 schedule 2026-08-31,
+      # peak/off-peak — encoded off-peak, see DEEPSEEK section note above)
+      input_cost_per_token: 0.00000022          # $0.22 / 1M off-peak (peak $0.44)
+      output_cost_per_token: 0.00000066         # $0.66 / 1M off-peak (peak $1.32)
+      cache_read_input_token_cost: 0.000000007  # $0.007 / 1M cache-hit (peak $0.014)
 
   # ==================== OPENROUTER ====================
 
@@ -247,31 +249,45 @@ model_list:
   # deepseek-chat and deepseek-reasoner are deprecated;
   # both map to deepseek-v4-flash (non-thinking vs thinking mode).
   # deepseek-v4-flash supports both modes via parameter.
+  # v4 pricing (checked 2026-08-31, api-docs.deepseek.com/quick_start/pricing):
+  # PEAK Mon-Fri 01:00-04:00 & 06:00-10:00 UTC = 2x off-peak; all else off-peak.
+  # Static costs encode OFF-PEAK (scheduled LLM usage targets off-peak; litellm
+  # cannot vary price by time of day). Alias names keep their (now stale) price
+  # suffixes — referenced as fallback model in hermes global + 6 profile configs.
 
   - model_name: deepseek-v4-flash(0.14/0.28)
     litellm_params:
       model: deepseek/deepseek-v4-flash
       api_key: os.environ/DEEPSEEK_API_KEY
+      input_cost_per_token: 0.00000022          # $0.22 / 1M off-peak (peak $0.44)
+      output_cost_per_token: 0.00000066         # $0.66 / 1M off-peak (peak $1.32)
+      cache_read_input_token_cost: 0.000000007  # $0.007 / 1M cache-hit (peak $0.014)
 
   - model_name: deepseek-v4-pro(0.435/0.87)
     litellm_params:
       model: deepseek/deepseek-v4-pro
       api_key: os.environ/DEEPSEEK_API_KEY
+      input_cost_per_token: 0.00000066          # $0.66 / 1M off-peak (peak $1.32)
+      output_cost_per_token: 0.00000198         # $1.98 / 1M off-peak (peak $3.96)
+      cache_read_input_token_cost: 0.000000011  # $0.011 / 1M cache-hit (peak $0.022)
 
   # Experimental vision model (docs: https://api-docs.deepseek.com/guides/vision).
   # Routed via the openai/ provider, NOT deepseek/: litellm 1.93.0's deepseek
   # transformation flattens message content lists to plain strings (drops image
   # parts, vision arrives empty); DeepSeek's API is OpenAI-compatible, and the
   # openai/ path passes content-part lists through unchanged.
-  # Pricing = deepseek-v4-flash list prices (user addendum 2026-08-29) — spend logs
-  # were showing $0 while pricing was unpublished.
+  # Pricing = deepseek-v4-flash-vision-exp schedule (2026-08-31): same peak/
+  # off-peak split as v4-flash — off-peak $0.22 in / $0.66 out, peak 2x, cache-hit
+  # $0.007. Encoded off-peak (scheduled vision jobs target off-peak; litellm
+  # cannot vary price by time of day).
   - model_name: deepseek-v4-flash-vision-exp
     litellm_params:
       model: openai/deepseek-v4-flash-vision-exp
       api_base: https://api.deepseek.com/v1
       api_key: os.environ/DEEPSEEK_API_KEY
-      input_cost_per_token: 0.00000014       # $0.14 / 1M
-      output_cost_per_token: 0.00000028      # $0.28 / 1M
+      input_cost_per_token: 0.00000022          # $0.22 / 1M off-peak (peak $0.44)
+      output_cost_per_token: 0.00000066         # $0.66 / 1M off-peak (peak $1.32)
+      cache_read_input_token_cost: 0.000000007  # $0.007 / 1M cache-hit (peak $0.014)
 
   # ==================== MISTRAL AI ====================
 
