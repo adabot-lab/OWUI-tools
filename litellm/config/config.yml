@@ -170,6 +170,19 @@ model_list:
       output_cost_per_token: 0.00000066         # $0.66 / 1M off-peak (peak $1.32)
       cache_read_input_token_cost: 0.000000007  # $0.007 / 1M cache-hit (peak $0.014)
 
+  # Virtual alias for the hermes fallback tier (fallback_providers #1 in all
+  # hermes configs, via LITELLM_FALLBACK_API_KEY). Backing swappable HERE —
+  # same params as hermes-vision / deepseek-v4-flash-vision-exp above.
+  - model_name: hermes-fallback
+    litellm_params:
+      model: openai/deepseek-v4-flash-vision-exp
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+      drop_params: true
+      input_cost_per_token: 0.00000022          # $0.22 / 1M off-peak (peak $0.44)
+      output_cost_per_token: 0.00000066         # $0.66 / 1M off-peak (peak $1.32)
+      cache_read_input_token_cost: 0.000000007  # $0.007 / 1M cache-hit (peak $0.014)
+
   # ==================== OPENROUTER ====================
 
   - model_name: flux-openrouter
