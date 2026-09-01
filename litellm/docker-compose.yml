@@ -7,11 +7,14 @@ services:
     volumes:
       - ./config/config.yml:/app/config.yaml:ro  # Read-only mount for config
       - ./config/strip_hermes.py:/app/strip_hermes.py:ro  # callback module referenced by config.yml
+      - ./config/fallback_notify.py:/app/fallback_notify.py:ro  # callback module referenced by config.yml
     env_file:
       - .env
     environment:
       DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
 #      STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+#      GOTIFY_URL: "http://<gotify-host>"   # gotify base URL — enables fallback-failover push pings; set per host in litellm/local.docker-compose.yml (gitignored), NOT here
+#      GOTIFY_TOKEN: "<app-token>"          # gotify application token (litellm app)
     command:
       - "--config"
       - "/app/config.yaml"
