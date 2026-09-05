@@ -105,8 +105,24 @@ model_list:
       output_cost_per_token: 0.0000044       # $4.40 / 1M
       cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached input
 
+  # Dash-prefixed twin of the bare glm-5.3-flash below (same backing + pricing):
+  # group name NOT in litellm.model_cost → `thinking` param classified
+  # unsupported → dropped via drop_params (workaround for litellm #31084/#31085).
+  - model_name: zai-glm-5.3-flash
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      input_cost_per_token: 0.00000015       # $0.15 / 1M (promo $0.075 until 2026-09-09)
+      output_cost_per_token: 0.0000005       # $0.50 / 1M (promo $0.25)
+      cache_read_input_token_cost: 0.00000003  # $0.03 / 1M cached (promo $0.015)
+
   # GLM-5.3-Flash: natively multimodal (text+image in), 1M ctx, released 2026-08-26.
-  # model_name kept bare (no zai- prefix): task spec requires id "glm-5.3-flash".
+  # model_name kept bare for OpenWebUI (pins this id; never sends `thinking` →
+  # unaffected). Registry-known name → `thinking` forwarded as top-level kwarg →
+  # ZaiException under litellm v1.93.0 (refs litellm #31084 merged, #31085
+  # open) — do NOT pin opencode/hermes here.
   # Pricing = LIST prices (docs.z.ai/guides/overview/pricing, 2026-08-27); 50% promo
   # runs until 2026-09-09 (UTC+8) — list prices encoded so spend logs stay correct after.
   - model_name: glm-5.3-flash
@@ -147,6 +163,20 @@ model_list:
       cache_read_input_token_cost: 0.00000026
 
   - model_name: hermes-execute
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
+
+  # opencode build pin — thinking kwarg arrives here too but drop_params drops it
+  # (group name not registry-known); future model bump = one `model:` edit here.
+  - model_name: hermes-code
     litellm_params:
       model: zai/glm-5.3-flash
       api_key: os.environ/ZAI_API_KEY
