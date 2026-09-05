@@ -174,9 +174,11 @@ model_list:
       output_cost_per_token: 0.0000005
       cache_read_input_token_cost: 0.00000003
 
-  # opencode build pin — thinking kwarg arrives here too but drop_params drops it
-  # (group name not registry-known); future model bump = one `model:` edit here.
-  - model_name: hermes-code
+  # opencode plan-agent pin (zai/hermes-coding-plan) — thinking kwarg arrives
+  # here too but drop_params drops it (group name not registry-known); future
+  # model bump = one `model:` edit here. reasoning_effort tunable per-entry,
+  # independently of hermes-coding-execute.
+  - model_name: hermes-coding-plan
     litellm_params:
       model: zai/glm-5.3-flash
       api_key: os.environ/ZAI_API_KEY
@@ -184,6 +186,20 @@ model_list:
       drop_params: true
       extra_body:
         reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
+
+  # opencode build-agent pin (zai/hermes-coding-execute) — same backing as
+  # hermes-coding-plan; effort independently tunable (currently medium).
+  - model_name: hermes-coding-execute
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: medium
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.0000005
       cache_read_input_token_cost: 0.00000003
