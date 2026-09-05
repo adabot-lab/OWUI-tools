@@ -451,6 +451,7 @@ litellm_settings:
     callbacks:
       - strip_hermes.strip_hermes_handler
       - fallback_notify.fallback_notifier
+      - strip_thinking.strip_thinking_handler  # pop client-sent `thinking` for zai-backed groups (litellm #31084/#31085, opencode 1.17.9 always sends it)
 
 
       # Optional: Disable SSL verification for self-signed certificates
