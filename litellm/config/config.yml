@@ -424,6 +424,9 @@ model_list:
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
+  # --- request/response payload storage + retention (added 2026-09-07) ---
+  store_prompts_in_spend_logs: true
+  maximum_spend_logs_retention_period: "90d"
 
 # ==================== LITELLM SETTINGS ====================
 litellm_settings:
