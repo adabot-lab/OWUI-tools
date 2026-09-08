@@ -14,7 +14,7 @@ services:
     environment:
       DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
 #      STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
-#      GOTIFY_URL: "http://<gotify-host>"   # gotify base URL — enables fallback-failover push pings; set per host in litellm/local.docker-compose.yml (gitignored), NOT here
+#      GOTIFY_URL: "http://<gotify-host>"   # gotify base URL — enables fallback-failover push pings; set per host in the gitignored litellm/.env (dummies in .env.example; compose env_file delivers), NOT here
 #      GOTIFY_TOKEN: "<app-token>"          # gotify application token (litellm app)
     command:
       - "--config"
