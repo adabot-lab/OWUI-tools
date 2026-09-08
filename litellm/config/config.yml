@@ -229,13 +229,6 @@ model_list:
       output_cost_per_token: 0.00000066         # $0.66 / 1M off-peak (peak $1.32)
       cache_read_input_token_cost: 0.000000007  # $0.007 / 1M cache-hit (peak $0.014)
 
-  # TEMPORARY — removed after live smoke (FN3)
-  - model_name: fallback-smoke-test
-    litellm_params:
-      model: openai/fallback-smoke-test
-      api_base: http://127.0.0.1:9/v1   # unroutable → immediate connection failure
-      api_key: sk-smoke-dummy           # dead endpoint, not a real secret
-
   # ==================== OPENROUTER ====================
 
   - model_name: flux-openrouter
@@ -436,9 +429,6 @@ litellm_settings:
 #      - zai-glm-5.1: ["deepseek-v4-flash(0.14/0.28)"]
 #      - deepseek-v4-flash(0.14/0.28): ["openrouter-deepseek-v4-flash(0.14/0.28)"]
 #      - deepseek-v4-pro(0.435/0.87): ["openrouter-deepseek-v4-flash(0.14/0.28)"]
-    # TEMPORARY — removed after live smoke (FN3): smoke pair proving the fallback_notify callback
-    fallbacks:
-      - fallback-smoke-test: ["hermes-fallback"]
     num_retries: 3                  # Default number of retries per request before giving up
     request_timeout: 300            # Max total time (seconds) for any request before timing out
     cooldown_time: 600              # how long to skip a deployment after too many failures
