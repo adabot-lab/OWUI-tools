@@ -5,6 +5,8 @@ import sys
 import time
 import types
 
+import pytest
+
 if "pytest" not in sys.modules:
     raise RuntimeError("This file is a pytest module; run it via pytest, not directly.")
 
@@ -291,3 +293,246 @@ def test_recovery_independent_from_failover_throttle(monkeypatch):
 
     assert len(FakeAsyncClient.posts) == 1
     assert FakeAsyncClient.posts[0]["json"]["title"] == "LiteLLM recovery"
+
+# --- quota-"until" cooldown (Phase B, Option Q1) -------------------------
+
+
+class FakeCooldownCache:
+    """Records add_deployment_to_cooldown calls, like CooldownCache."""
+
+    calls = []
+
+    def add_deployment_to_cooldown(
+        self, model_id, original_exception, exception_status, cooldown_time
+    ):
+        FakeCooldownCache.calls.append(
+            {
+                "model_id": model_id,
+                "original_exception": original_exception,
+                "exception_status": exception_status,
+                "cooldown_time": cooldown_time,
+            }
+        )
+
+
+class FakeRouter:
+    cooldown_cache = None  # set per-test via _reset_q1()
+
+
+class FakeRateLimitError(Exception):
+    """RateLimitError stand-in: str() carries the quota deadline."""
+
+    def __init__(self, message, status_code=429):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _reset_q1(monkeypatch):
+    FakeCooldownCache.calls = []
+    FakeRouter.cooldown_cache = FakeCooldownCache()
+    monkeypatch.setattr(fallback_notify, "_get_llm_router", lambda: FakeRouter())
+
+
+def _failure_kwargs(
+    deadline_text,
+    deployment_id="dep-primary",
+    status_code=429,
+    group="q1g",
+):
+    exc = FakeRateLimitError(deadline_text, status_code=status_code)
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": group,
+                "model_info": {"id": deployment_id},
+            }
+        },
+        "exception": exc,
+    }
+    return kwargs, exc
+
+
+# --- parse table ----------------------------------------------------------
+
+
+def test_parse_iso_zulu():
+    from datetime import datetime, timezone as tz
+
+    ts = fallback_notify.parse_quota_until(
+        "You exceeded your current quota. Usage limit until "
+        "2027-09-15T23:30:00Z. Try again after that."
+    )
+    assert ts == datetime(2027, 9, 15, 23, 30, tzinfo=tz.utc).timestamp()
+
+
+def test_parse_iso_offset():
+    from datetime import datetime, timezone as tz
+
+    ts = fallback_notify.parse_quota_until(
+        "quota exceeded, reset at 2027-03-01T12:00:00+02:00"
+    )
+    assert ts == datetime(2027, 3, 1, 10, 0, tzinfo=tz.utc).timestamp()
+
+
+def test_parse_iso_space_separator():
+    from datetime import datetime, timezone as tz
+
+    ts = fallback_notify.parse_quota_until("Limit resets 2027-03-01 12:00:00")
+    assert ts == datetime(2027, 3, 1, 12, 0, tzinfo=tz.utc).timestamp()
+
+
+def test_parse_iso_naive_assumes_utc():
+    from datetime import datetime, timezone as tz
+
+    ts = fallback_notify.parse_quota_until("Limit resets 2027-03-01T12:00:00")
+    assert ts == datetime(2027, 3, 1, 12, 0, tzinfo=tz.utc).timestamp()
+
+
+def test_parse_rfc2822():
+    from datetime import datetime, timezone as tz
+
+    ts = fallback_notify.parse_quota_until(
+        "Rate limit will reset on Mon, 15 Sep 2027 23:30:00 GMT"
+    )
+    assert ts == datetime(2027, 9, 15, 23, 30, tzinfo=tz.utc).timestamp()
+
+
+def test_parse_relative_seconds():
+    t0 = time.time()
+    ts = fallback_notify.parse_quota_until("Try again in 90 seconds")
+    assert ts == pytest.approx(t0 + 90, abs=5)
+
+
+def test_parse_relative_minutes():
+    t0 = time.time()
+    ts = fallback_notify.parse_quota_until("retry after 5m")
+    assert ts == pytest.approx(t0 + 300, abs=5)
+
+
+def test_parse_past_deadline_returns_none():
+    assert (
+        fallback_notify.parse_quota_until("quota until 2020-01-01T00:00:00Z")
+        is None
+    )
+
+
+def test_parse_unparseable_returns_none():
+    assert fallback_notify.parse_quota_until("Something went wrong") is None
+    assert fallback_notify.parse_quota_until("") is None
+    assert fallback_notify.parse_quota_until(None) is None
+
+
+def test_parse_past_deadline_does_not_shadow_relative():
+    # A stale ISO timestamp in the text must not swallow the relative hint
+    t0 = time.time()
+    ts = fallback_notify.parse_quota_until(
+        "request at 2020-01-01T00:00:00Z failed; retry in 30 seconds"
+    )
+    assert ts == pytest.approx(t0 + 30, abs=5)
+
+
+# --- cooldown step -------------------------------------------------------
+
+
+def _future_iso(offset_s):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset_s))
+
+
+def test_quota_cooldown_registers_cooldown(monkeypatch):
+    _reset_q1(monkeypatch)
+    kwargs, exc = _failure_kwargs(
+        f"You exceeded quota. Usage limit until {_future_iso(3600)}."
+    )
+    ok = fallback_notify._quota_cooldown_from_failure(kwargs)
+    assert ok is True
+    assert len(FakeCooldownCache.calls) == 1
+    call = FakeCooldownCache.calls[0]
+    assert call["model_id"] == "dep-primary"
+    assert call["original_exception"] is exc
+    assert call["exception_status"] == 429
+    assert call["cooldown_time"] == pytest.approx(3600, abs=5)
+
+
+def test_quota_cooldown_over_24h_ignored(monkeypatch, caplog):
+    _reset_q1(monkeypatch)
+    kwargs, _ = _failure_kwargs("usage limit until 2030-01-01T00:00:00Z")
+    with caplog.at_level(logging.INFO):
+        ok = fallback_notify._quota_cooldown_from_failure(kwargs)
+    assert ok is False
+    assert FakeCooldownCache.calls == []
+    assert any("exceeds" in r.message for r in caplog.records)
+
+
+def test_quota_cooldown_via_async_hook(monkeypatch):
+    _reset_q1(monkeypatch)
+    kwargs, _ = _failure_kwargs(f"usage limit until {_future_iso(1200)}")
+    asyncio.run(
+        fallback_notify.fallback_notifier.async_log_failure_event(
+            kwargs, None, None, None
+        )
+    )
+    assert len(FakeCooldownCache.calls) == 1
+    assert FakeCooldownCache.calls[0]["model_id"] == "dep-primary"
+
+
+def test_quota_cooldown_via_sync_hook(monkeypatch):
+    _reset_q1(monkeypatch)
+    kwargs, _ = _failure_kwargs(f"usage limit until {_future_iso(1200)}")
+    fallback_notify.fallback_notifier.log_failure_event(kwargs, None, None, None)
+    assert len(FakeCooldownCache.calls) == 1
+    assert FakeCooldownCache.calls[0]["model_id"] == "dep-primary"
+
+
+def test_quota_cooldown_missing_router_no_crash(monkeypatch):
+    FakeCooldownCache.calls = []
+    monkeypatch.setattr(fallback_notify, "_get_llm_router", lambda: None)
+    kwargs, _ = _failure_kwargs(f"usage limit until {_future_iso(600)}")
+    ok = fallback_notify._quota_cooldown_from_failure(kwargs)
+    assert ok is False
+    assert FakeCooldownCache.calls == []
+
+
+def test_quota_cooldown_missing_cache_no_crash(monkeypatch):
+    FakeCooldownCache.calls = []
+    FakeRouter.cooldown_cache = None
+    monkeypatch.setattr(fallback_notify, "_get_llm_router", lambda: FakeRouter())
+    kwargs, _ = _failure_kwargs(f"usage limit until {_future_iso(600)}")
+    ok = fallback_notify._quota_cooldown_from_failure(kwargs)
+    assert ok is False
+    assert FakeCooldownCache.calls == []
+
+
+def test_quota_cooldown_wrong_status_ignored(monkeypatch):
+    _reset_q1(monkeypatch)
+    kwargs, _ = _failure_kwargs(
+        f"usage limit until {_future_iso(600)}", status_code=500
+    )
+    ok = fallback_notify._quota_cooldown_from_failure(kwargs)
+    assert ok is False
+    assert FakeCooldownCache.calls == []
+
+
+def test_quota_cooldown_no_exception_noop(monkeypatch):
+    _reset_q1(monkeypatch)
+    ok = fallback_notify._quota_cooldown_from_failure({"litellm_params": {}})
+    assert ok is False
+    assert FakeCooldownCache.calls == []
+
+
+def test_quota_cooldown_unparseable_body_noop(monkeypatch):
+    _reset_q1(monkeypatch)
+    kwargs, _ = _failure_kwargs("This model is overloaded")
+    ok = fallback_notify._quota_cooldown_from_failure(kwargs)
+    assert ok is False
+    assert FakeCooldownCache.calls == []
+
+
+def test_quota_cooldown_str_status(monkeypatch):
+    """litellm exceptions can carry str status codes — int() must coerce."""
+    _reset_q1(monkeypatch)
+    kwargs, _ = _failure_kwargs(
+        f"usage limit until {_future_iso(600)}", status_code="429"
+    )
+    ok = fallback_notify._quota_cooldown_from_failure(kwargs)
+    assert ok is True
+    assert FakeCooldownCache.calls[0]["exception_status"] == 429
