@@ -1,10 +1,14 @@
 """Unit tests for the Reddit .rss backend (no network access needed)."""
 
+import asyncio
+import json
+
 import pytest
 
 import httpx
 
 import reddit_backend as rb
+import server
 
 
 # ── parse_reddit_url ──────────────────────────────────────────────────────────
@@ -120,8 +124,6 @@ def test_feed_urls():
 
 # ── gate: rate limit + cache (injected clock/fetch, no network) ──────────────
 
-import asyncio
-
 
 class FakeClock:
     def __init__(self): self.t = 1000.0
@@ -188,3 +190,62 @@ def test_gate_fetch_failure_generic_error():
     gate, clock, _, _ = _mk_gate()
     entries, err = asyncio.run(gate.get("https://x/.rss", fetch_boom, clock))
     assert entries is None and "failed" in err["error"]
+
+
+# ── server integration ───────────────────────────────────────────────────────
+
+
+def test_fetch_page_intercepts_reddit_thread(monkeypatch):
+    sentinel = {"url": "x", "title": "t", "content": "c", "content_length": 1,
+                "truncated": False, "via": "reddit-rss"}
+    async def fake_fetch(parsed, url, max_length, mi, ttl):
+        assert parsed["mode"] == "thread"
+        return sentinel
+    monkeypatch.setattr(server, "reddit_fetch", fake_fetch)
+    out = asyncio.run(server._fetch_page(
+        "https://www.reddit.com/r/x/comments/abc/t/", 5000))
+    assert out is sentinel
+
+
+def test_fetch_page_leaves_non_reddit_alone(monkeypatch):
+    async def fail_fetch(*a, **k):
+        raise AssertionError("reddit backend must not be called")
+    monkeypatch.setattr(server, "reddit_fetch", fail_fetch)
+    out = asyncio.run(server._fetch_page("http://127.0.0.1:1/", 5000))
+    assert "Failed to fetch" in out["content"]
+
+
+def test_fetch_page_reddit_disabled(monkeypatch):
+    async def fail_fetch(*a, **k):
+        raise AssertionError("reddit backend must not be called when disabled")
+    monkeypatch.setattr(server, "reddit_fetch", fail_fetch)
+    monkeypatch.setattr(server, "USE_REDDIT_BACKEND", False)
+    out = asyncio.run(server._fetch_page("http://127.0.0.1:1/", 5000))
+    assert "Failed to fetch" in out["content"]
+
+
+def test_search_reddit_tool(monkeypatch):
+    async def fake_search(query, subreddit, sort, tr, limit, mi, ttl):
+        assert (query, subreddit, sort) == ("ollama", "LocalLLaMA", "new")
+        return rb._parse_atom(_ATOM_FIXTURE), None
+    monkeypatch.setattr(server, "search_feeds", fake_search)
+    out = asyncio.run(server.search_reddit("ollama", subreddit="LocalLLaMA", sort="new"))
+    parsed = json.loads(out)
+    assert parsed["total_results"] == 2
+    assert parsed["results"][0]["title"] == "Post title"
+
+
+def test_search_reddit_rejects_bad_sort(monkeypatch):
+    async def boom(*a, **k):
+        raise AssertionError("must validate before fetching")
+    monkeypatch.setattr(server, "search_feeds", boom)
+    out = asyncio.run(server.search_reddit("q", sort="bogus"))
+    assert "error" in json.loads(out)
+
+
+def test_search_reddit_rate_limited_passthrough(monkeypatch):
+    async def limited(*a, **k):
+        return None, {"error": "reddit rate limited (429); retry in 90s", "retry_after": 90}
+    monkeypatch.setattr(server, "search_feeds", limited)
+    parsed = json.loads(asyncio.run(server.search_reddit("q")))
+    assert parsed["retry_after"] == 90
