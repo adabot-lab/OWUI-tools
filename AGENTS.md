@@ -32,3 +32,6 @@ Compose include-trees. Python-first. Deploy target: .209.
 - Subdir services join the shared `ollama-tools` network.
 - Production on .209 uses `/home/shadow01/docker-compose.yml` (open-webui
   stack), which includes the same subdir compose files.
+- websearch-mcp serves reddit.com URLs through `reddit_backend.py`
+  (anonymous .rss Atom feeds, rate-gated + cached); never route reddit
+  through the browser/stealth escalation tiers — they cannot read comments.
