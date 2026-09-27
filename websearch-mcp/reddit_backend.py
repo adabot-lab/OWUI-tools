@@ -273,7 +273,7 @@ def gate_status() -> dict:
     if _gate is None:
         return {"enabled": False, "cached_feeds": 0}
     return {"enabled": True, "min_interval_s": _gate.min_interval,
-            "cache_ttl_s": _gate.cache_ttl, "cached_feeds": len(_gate.cache),
+            "cache_ttl_s": _gate.cache_ttl, "cached_feeds": len(_gate._cache),
             "last_success": _gate.last_success}
 
 

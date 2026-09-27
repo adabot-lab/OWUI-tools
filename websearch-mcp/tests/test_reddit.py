@@ -192,6 +192,26 @@ def test_gate_fetch_failure_generic_error():
     assert entries is None and "failed" in err["error"]
 
 
+def test_gate_status_before_and_after_gate_init(monkeypatch):
+    # uninitialized singleton: backend reported off, no crash (regression:
+    # live health_check silently swallowed AttributeError -> enabled:false)
+    monkeypatch.setattr(rb, "_gate", None)
+    assert rb.gate_status() == {"enabled": False, "cached_feeds": 0}
+
+    # initialized + one cached feed: enabled with real cache size (regression:
+    # gate_status read _gate.cache, raised AttributeError -> tool call failed)
+    gate, clock, fetch, _ = _mk_gate()
+    entries, err = asyncio.run(gate.get("https://x/.rss", fetch, clock))
+    assert err is None and entries is not None and len(entries) == 2
+    monkeypatch.setattr(rb, "_gate", gate)
+    status = rb.gate_status()
+    assert status["enabled"] is True
+    assert status["cached_feeds"] == 1
+    assert status["min_interval_s"] == 65.0
+    assert status["cache_ttl_s"] == 600.0
+    assert status["last_success"] is not None
+
+
 # ── server integration ───────────────────────────────────────────────────────
 
 
