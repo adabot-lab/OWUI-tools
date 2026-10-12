@@ -2,7 +2,7 @@ import os
 import re
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 import httpx
@@ -38,6 +38,29 @@ QUOTA_STATUSES = frozenset((402, 403, 429))
 # would wedge the primary behind the fallback semi-permanently.
 MAX_QUOTA_COOLDOWN_S = 24 * 3600
 
+# Providers whose quota text carries a **tz-naive wall clock in their own local
+# zone** rather than UTC. Without this, a naive stamp is read as UTC and the
+# deadline lands hours late (2026-10-12: Z.AI's "reset at 19:48:48" Beijing was
+# read as 19:48:48 UTC → an 11 h cooldown instead of 3 h, wedging hermes-plan).
+# Unlisted/unknown providers keep the UTC default: no silent behaviour change.
+_PROVIDER_UTC_OFFSET_S = {
+    "zai": 8 * 3600,  # Z.AI renders the reset as Beijing local time (UTC+8)
+}
+
+# Only the deadline's phrasing is provider-specific; the offset fills in a
+# tz-naive stamp only, so an explicit "Z"/"+02:00" in the text always wins.
+_PROVIDER_PREFIX_RE = re.compile(r"^([a-z0-9_]+)\s*/\s*", re.IGNORECASE)
+
+# Quota-window phrasing: "Usage limit reached for 5 hour." The number is the
+# LENGTH of the quota window, not a wait — reading it through the relative
+# branch would manufacture a cooldown of exactly that length.
+_QUOTA_WINDOW_PHRASE_RE = re.compile(
+    r"\b(?:usage\s+)?(?:limit|quota)\s+"
+    r"(?:reached|exceeded|hit|used\s+up)\s+for\s+\d+(?:\.\d+)?\s*"
+    r"(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b",
+    re.IGNORECASE,
+)
+
 # datetime.fromisoformat on py<3.11 cannot parse trailing "Z"; normalize.
 _ZULU_RE = re.compile(r"Z\s*$")
 
@@ -63,13 +86,61 @@ _REL_UNITS_S = {
 }
 
 
-def parse_quota_until(text):
+def provider_zone_offset_s(kwargs):
+    """UTC offset (seconds) for a deployment's tz-naive quota stamps.
+
+    Z.AI's quota text carries a bare wall clock in Beijing local time; reading it
+    as UTC put the 2026-10-12 deadline 8 h late. The offset is resolved from the
+    router-stamped deployment metadata so it stays scoped per provider — an
+    unknown provider gets 0 (UTC), i.e. the historical default.
+
+    Candidates, most authoritative first: the resolved ``litellm_provider``, the
+    deployment's own ``model``, then its registry ``key`` — the last two carry a
+    ``<provider>/<model>`` prefix. Any surprise returns 0 rather than raising:
+    the caller must never crash the proxy over a metadata shape.
+    """
+    try:
+        metadata = (kwargs.get("litellm_params") or {}).get("metadata") or {}
+        model_info = metadata.get("model_info") or {}
+        candidates = (
+            model_info.get("litellm_provider"),
+            metadata.get("deployment"),
+            (kwargs.get("litellm_params") or {}).get("model"),
+            model_info.get("key"),
+        )
+    except AttributeError:
+        return 0
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate:
+            continue
+        name = candidate.strip().lower()
+        m = _PROVIDER_PREFIX_RE.match(name)
+        if m:
+            name = m.group(1)  # "zai/glm-5.3" -> "zai"
+        if name in _PROVIDER_UTC_OFFSET_S:
+            return _PROVIDER_UTC_OFFSET_S[name]
+    return 0
+
+
+def format_zone_offset(offset_s):
+    """'+08:00' / '+00:00' — log-friendly rendering of a zone offset."""
+    sign = "+" if offset_s >= 0 else "-"
+    total = abs(int(offset_s))
+    return f"{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
+
+
+def parse_quota_until(text, tz_offset_s=0):
     """Extract a quota deadline (unix ts) from error text.
 
     Tries, in order: ISO-8601, RFC-2822 (strict-ish), relative "<n> <unit>".
     Only FUTURE deadlines count — a past datetime in the text (e.g. a stale
     request timestamp) does not shadow a later valid candidate. Returns a
     unix timestamp, or None when no future deadline is found.
+
+    ``tz_offset_s`` is the zone to assume for a tz-*naive* stamp: 0 (UTC) is the
+    default so unlisted providers keep their historical behaviour, while
+    providers whose text is local time pass their real offset (Z.AI = +8 h) —
+    see ``_PROVIDER_UTC_OFFSET_S``. A stamp that carries its own tz/Z always wins.
     """
     if not isinstance(text, str) or not text:
         return None
@@ -80,10 +151,10 @@ def parse_quota_until(text):
         candidate = _ZULU_RE.sub("+00:00", raw)
         try:
             dt = datetime.fromisoformat(candidate)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)  # provider default UTC
         except ValueError:
             continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone(timedelta(seconds=tz_offset_s)))
         if dt.timestamp() > now:
             return dt.timestamp()
 
@@ -95,11 +166,14 @@ def parse_quota_until(text):
         except (TypeError, ValueError):
             continue
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=timezone(timedelta(seconds=tz_offset_s)))
         if dt.timestamp() > now:
             return dt.timestamp()
 
-    m = _REL_RE.search(text)
+    # A quota-window phrase ("Usage limit reached for 5 hour") states the window
+    # LENGTH, not a wait — drop it before the relative scan so a stale/absent
+    # deadline cannot be turned into a cooldown of exactly that length.
+    m = _REL_RE.search(_QUOTA_WINDOW_PHRASE_RE.sub(" ", text))
     if m:
         return now + float(m.group(1)) * _REL_UNITS_S[m.group(2).lower()]
 
@@ -149,7 +223,8 @@ def _quota_cooldown_from_failure(kwargs, now=None):
     if status_int not in QUOTA_STATUSES:
         return False
 
-    until = parse_quota_until(str(exc))
+    zone_offset_s = provider_zone_offset_s(kwargs)
+    until = parse_quota_until(str(exc), tz_offset_s=zone_offset_s)
     if until is None:
         return False
 
@@ -198,10 +273,11 @@ def _quota_cooldown_from_failure(kwargs, now=None):
 
     logger.info(
         "[fallback_notify] quota deadline parsed — deployment %s cooled down "
-        "for %.0f s (until %s)",
+        "for %.0f s (until %s, zone %s)",
         deployment_id,
         cooldown_s,
         datetime.fromtimestamp(until, tz=timezone.utc).isoformat(),
+        format_zone_offset(zone_offset_s),
     )
     return True
 
