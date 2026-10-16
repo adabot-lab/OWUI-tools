@@ -417,6 +417,14 @@ model_list:
 #      api_key: os.environ/DASHSCOPE_API_KEY
 #      api_base: os.environ/DASHSCOPE_API_BASE
 
+  # TEMPORARY (2026-10-16): fallback smoke-test primary — unroutable api_base so the
+  # proxy fallback path fires deterministically. REMOVE with the cleanup commit.
+  - model_name: fallback-smoke-test
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: http://127.0.0.1:9/v1
+      api_key: dummy-not-a-secret
+
 
 # ==================== GENERAL SETTINGS ====================
 general_settings:
@@ -430,10 +438,20 @@ general_settings:
 litellm_settings:
     modify_params: true            # Auto-handle missing reasoning_content/thinking_blocks in multi-turn conversations
     check_provider_endpoint: true   # Queries upstream provider's /models endpoint to resolve wildcards (e.g. openai/*)
-#    fallbacks:                      # When a model fails all retries, fall back to these alternatives
-#      - zai-glm-5.1: ["deepseek-v4-flash(0.14/0.28)"]
-#      - deepseek-v4-flash(0.14/0.28): ["openrouter-deepseek-v4-flash(0.14/0.28)"]
-#      - deepseek-v4-pro(0.435/0.87): ["openrouter-deepseek-v4-flash(0.14/0.28)"]
+    # Production failover pairs (2026-10-16): zai-backed hermes virtuals fall back to
+    # hermes-fallback (= openai/deepseek-flash, pay-per-token) INSIDE the proxy.
+    # The hermes-side tier-1 fallback was removed the same day; hermes profiles now
+    # fall back only to local llamacpp when the proxy itself is unreachable.
+    # Failover/recovery pings via fallback_notify.py (gotify). hermes-vision gets no
+    # pair: it IS deepseek-flash already. `fallbacks:` is a LIST of single-key mappings.
+    fallbacks:
+      - hermes-plan: ["hermes-fallback"]
+      - hermes-execute: ["hermes-fallback"]
+      - hermes-tasks: ["hermes-fallback"]
+      - hermes-coding-plan: ["hermes-fallback"]
+      - hermes-coding-execute: ["hermes-fallback"]
+      # TEMPORARY smoke pair (2026-10-16) — remove with the cleanup commit after smoke.
+      - fallback-smoke-test: ["hermes-fallback"]
     num_retries: 3                  # Default number of retries per request before giving up
     request_timeout: 300            # Max total time (seconds) for any request before timing out
     cooldown_time: 600              # how long to skip a deployment after too many failures
