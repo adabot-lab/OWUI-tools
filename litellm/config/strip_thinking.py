@@ -55,7 +55,6 @@ class StripThinkingHandler(CustomLogger):
             "glm-5.3-flash",
             "hermes-tasks",
             "hermes-plan",
-            "hermes-execute",
             "hermes-coding-plan",
             "hermes-coding-execute",
         }
