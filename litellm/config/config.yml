@@ -164,20 +164,15 @@ model_list:
 
   - model_name: hermes-execute
     litellm_params:
-      model: openai/deepseek-flash
-      api_base: https://api.deepseek.com/v1
-      api_key: os.environ/DEEPSEEK_API_KEY
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
       drop_params: true
-      # deepseek-flash = DeepSeek-V4.1-Flash-1017; thinking default ON.
-      # reasoning_effort natively accepted (live-probed 2026-10-23: 200 +
-      # reasoning_content). Pricing off-peak encoded; peak = 2x Mon-Fri
-      # 01:00-04:00 & 06:00-10:00 UTC excl. Chinese public holidays
-      # (api-docs.deepseek.com/quick_start/pricing, checked 2026-10-23).
       extra_body:
         reasoning_effort: high
-      input_cost_per_token: 0.00000015          # $0.15 / 1M off-peak (peak $0.30)
-      output_cost_per_token: 0.0000006          # $0.60 / 1M off-peak (peak $1.20)
-      cache_read_input_token_cost: 0.000000003  # $0.003 / 1M cache-hit (peak $0.006)
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
 
   # opencode plan-agent pin (zai/hermes-coding-plan) — thinking kwarg arrives
   # here too but drop_params drops it (group name not registry-known); future
