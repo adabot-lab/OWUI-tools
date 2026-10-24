@@ -418,6 +418,31 @@ model_list:
 #      api_base: os.environ/DASHSCOPE_API_BASE
 
 
+  # ==================== CHATGPT SUBSCRIPTION (Codex backend) ====================
+  # ChatGPT Plus subscription (not OpenAI API) via litellm's chatgpt/ provider.
+  # Auth: ONE shared auth.json at CHATGPT_TOKEN_DIR (/app/chatgpt-auth inside the
+  # container; host dir litellm/chatgpt-auth, gitignored). Login is OAuth device
+  # flow, done OUTSIDE the proxy; the refresh token is single-use and the file is
+  # rewritten on refresh -> exactly ONE host may hold a copy. .209 only; the
+  # oracle proxy has no auth file and serves these models as unavailable.
+  # Endpoint: Responses API. /v1/chat/completions is bridged to Responses.
+  # No cost-map price -> spend logs record $0 (subscription quota, not per-token
+  # billing); token counts are still attributed. Use rpm_limit/tpm_limit on keys
+  # for caps if needed.
+  # Model IDs checked against developers.openai.com/codex/models on 2026-10-24
+  # (Plus: gpt-6.1-sol; gpt-6-luna on paid plans). Retired: gpt-5.4, gpt-5.5.
+  - model_name: chatgpt-gpt-6.1-sol
+    litellm_params:
+      model: chatgpt/gpt-6.1-sol
+    model_info:
+      mode: responses
+
+  - model_name: chatgpt-gpt-6-luna
+    litellm_params:
+      model: chatgpt/gpt-6-luna
+    model_info:
+      mode: responses
+
 # ==================== GENERAL SETTINGS ====================
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
