@@ -27,6 +27,7 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 def _git(args, cwd=None):
     env = os.environ.copy()
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     helper = DATA_DIR / "git-askpass.sh"
     helper.write_text('#!/bin/sh\ncase "$1" in *sername*) echo x ;; *) echo "$IBR_GITHUB_PAT" ;; esac\n')
     helper.chmod(0o700)

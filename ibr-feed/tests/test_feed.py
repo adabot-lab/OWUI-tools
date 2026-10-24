@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -9,10 +10,17 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Fixed commit timestamps keep entry dates deterministic: each fixture commit
+# gets explicit distinct GIT_AUTHOR_DATE/GIT_COMMITTER_DATE, so assertions on
+# published/updated ordering never depend on wall-clock second precision.
+BASE_DATE = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
-def commit(repo, message):
+
+def commit(repo, message, seq=0):
+    date = (BASE_DATE + timedelta(days=seq)).isoformat()
+    env = {**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", message], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", message], cwd=repo, check=True, capture_output=True, env=env)
 
 
 @pytest.fixture
@@ -22,6 +30,7 @@ def repo(tmp_path, monkeypatch):
     root = tmp_path / "fixture"
     (root / "Leitsätze").mkdir(parents=True)
     (root / "Entscheidungsgründe").mkdir()
+    (tmp_path / "data").mkdir()
     subprocess.run(["git", "init", "-b", "main", str(root)], check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Fixture"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=root, check=True)
@@ -30,7 +39,7 @@ def repo(tmp_path, monkeypatch):
     (root / "Leitsätze" / "Canonical_02.md").write_text('---\ntitle: "VG Köln, Urteil vom 03.01.2024"\n---\n\n# VG Köln, Urteil vom 03.01.2024\n\nDritter Satz.\n', encoding="utf-8")
     (root / "Leitsätze" / "LS-2.md").write_text("LG Bonn, Urteil vom 04.01.2024\n\nVierter Satz.\n", encoding="utf-8")
     (root / "Entscheidungsgründe" / "excluded.md").write_text("not included", encoding="utf-8")
-    commit(root, "fixture")
+    commit(root, "fixture", seq=1)
     monkeypatch.setattr(app, "REPO_DIR", root)
     monkeypatch.setattr(app, "FEED_FILE", tmp_path / "feed.atom")
     monkeypatch.setattr(app, "FEED_TOKEN", "a" * 48)
@@ -48,7 +57,7 @@ def test_append_preserves_existing_entries(repo):
     import app
     before = ET.fromstring(app.build_feed())
     (repo / "Leitsätze" / "LS-3.md").write_text("OVG Bremen, Urteil\n\nFünfter Satz.\n", encoding="utf-8")
-    commit(repo, "append")
+    commit(repo, "append", seq=2)
     after = ET.fromstring(app.build_feed())
     ns = {"a": "http://www.w3.org/2005/Atom"}
     before_entries = {e.findtext("a:id", namespaces=ns): ET.tostring(e) for e in before.findall("a:entry", ns)}
@@ -83,7 +92,7 @@ def test_modify_and_delete(repo):
     before = ET.fromstring(app.build_feed())
     path = repo / "Leitsätze" / "Canonical_01.md"
     path.write_text(path.read_text(encoding="utf-8").replace("Erster Satz", "Geänderter Satz"), encoding="utf-8")
-    commit(repo, "modify")
+    commit(repo, "modify", seq=2)
     modified = ET.fromstring(app.build_feed())
     ns = {"a": "http://www.w3.org/2005/Atom"}
     old = {e.findtext("a:id", namespaces=ns): e for e in before.findall("a:entry", ns)}
@@ -91,6 +100,6 @@ def test_modify_and_delete(repo):
     key = "urn:ibr-leitsaetze:Canonical_01"
     assert key in new and new[key].findtext("a:updated", namespaces=ns) > old[key].findtext("a:updated", namespaces=ns)
     (repo / "Leitsätze" / "LS-2.md").unlink()
-    commit(repo, "delete")
+    commit(repo, "delete", seq=3)
     deleted = ET.fromstring(app.build_feed())
     assert "urn:ibr-leitsaetze:LS-2" not in {e.findtext("a:id", namespaces=ns) for e in deleted.findall("a:entry", ns)}

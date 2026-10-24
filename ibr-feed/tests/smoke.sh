@@ -9,7 +9,7 @@ cleanup() {
   rm -rf "$root"
 }
 trap cleanup EXIT
-mkdir -p "$root/Leitsätze" "$root/Entscheidungsgründe"
+mkdir -p "$root/Leitsätze" "$root/Entscheidungsgründe" "$root/data"
 cd "$root"
 git init -b main >/dev/null
 git config user.name Fixture
@@ -48,11 +48,21 @@ echo ignored > 'Entscheidungsgründe/ignored.md'
 git add .
 git commit -m fixture >/dev/null
 docker build -f "$service_dir/Dockerfile" -t ibr-feed-smoke "$service_dir"
-docker run -d --name ibr-feed-smoke -e IBR_GITHUB_PAT=dummy -e IBR_FEED_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -e IBR_REPO_URL="file:///fixture" -e IBR_DATA_DIR=/data -v "$root:/fixture:ro" -v "$root/data:/data" -p "127.0.0.1:$port:8000" ibr-feed-smoke >/dev/null
+# The container runs as the host uid: the read-only, host-owned fixture is
+# then same-uid (git refuses to serve foreign-owned repos: "dubious
+# ownership"), and everything the app writes under the /data bind is owned
+# by the invoking user, so cleanup needs no root. No host path is written.
+docker run -d --name ibr-feed-smoke --user "$(id -u):$(id -g)" -e IBR_GITHUB_PAT=dummy -e IBR_FEED_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -e IBR_REPO_URL="file:///fixture" -e IBR_DATA_DIR=/data -v "$root:/fixture:ro" -v "$root/data:/data" -p "127.0.0.1:$port:8000" ibr-feed-smoke >/dev/null
+served=""
 for attempt in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:$port/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/leitsaetze.atom" -o "$root/feed.atom"; then break; fi
+  if curl -fsS "http://127.0.0.1:$port/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/leitsaetze.atom" -o "$root/feed.atom"; then served=1; break; fi
   sleep 1
 done
+if [ -z "$served" ]; then
+  echo "smoke FAIL: feed not served; container logs:"
+  docker logs ibr-feed-smoke 2>&1 | tail -20
+  exit 1
+fi
 python3 - "$root/feed.atom" <<'PY'
 import sys, xml.etree.ElementTree as ET
 root = ET.parse(sys.argv[1]).getroot()
