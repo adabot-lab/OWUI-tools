@@ -35,6 +35,7 @@ services:
       - RERANK_ENABLED=${RERANK_ENABLED:-false}
       - RERANK_BASE_URL=${RERANK_BASE_URL:-}
       - RERANK_MODEL=${RERANK_MODEL:-}
+      - RERANK_MODE=${RERANK_MODE:-listwise}
       - RERANK_TIMEOUT_S=${RERANK_TIMEOUT_S:-3.0}
       - RERANK_CANDIDATES=${RERANK_CANDIDATES:-}
     env_file:

@@ -8,20 +8,35 @@ a disabled reranker from the pre-add-on engine by looking at the output.
 Sync httpx client on purpose: engine calls already run inside
 ``asyncio.to_thread`` at the MCP layer, so blocking here is fine.
 
-Endpoint shape: the llama-swap model passthrough
-``{RERANK_BASE_URL}/upstream/{RERANK_MODEL}/v1/systemone`` — llama-swap
-proxies any method+path under ``/upstream/<model>/`` straight to that
-model's llama-server, which serves llama.cpp's ``POST /v1/systemone``
-decision-model endpoint. The passthrough works on any llama-swap version;
-the bare ``/v1/systemone`` route would need llama-swap >= v262.
+Two wire shapes, selected by ``RERANK_MODE`` (default ``listwise`` — the
+historical behavior, so pre-RERANK_MODE deployments keep working):
 
-Wire format (llama.cpp PR #29818 / HF blog "New in llama.cpp: Decision
-Models"): one request = one ``state`` + a map of questions. ``score``
-questions take 2-10 levels lowest-first and return an expected level as
-``answers[<qid>]["score"]`` (float, can fall between two levels).
-Reranking shape (benchmark-best pattern): listwise — state carries the
-query plus all numbered passages, one score question per passage, chunks
-ordered by expected level.
+- ``listwise`` — llama.cpp decision-model endpoint via the llama-swap model
+  passthrough ``{RERANK_BASE_URL}/upstream/{RERANK_MODEL}/v1/systemone``.
+  llama-swap proxies any method+path under ``/upstream/<model>/`` straight
+  to that model's llama-server, which serves llama.cpp's ``POST
+  /v1/systemone`` decision-model endpoint. The passthrough works on any
+  llama-swap version; the bare ``/v1/systemone`` route would need
+  llama-swap >= v262. Wire format (llama.cpp PR #29818 / HF blog "New in
+  llama.cpp: Decision Models"): one request = one ``state`` + a map of
+  questions. ``score`` questions take 2-10 levels lowest-first and return
+  an expected level as ``answers[<qid>]["score"]`` (float, can fall between
+  two levels). Reranking shape (benchmark-best pattern): listwise — state
+  carries the query plus all numbered passages, one score question per
+  passage, chunks ordered by expected level.
+
+- ``rerank`` — llama.cpp encoder endpoint
+  ``{RERANK_BASE_URL}/upstream/{RERANK_MODEL}/v1/rerank`` (llama-swap
+  passthrough, same composition), body ``{"model", "query", "documents"[]}``.
+  The response ``results[]`` entries carry ``index`` (position in the
+  request's ``documents``) and ``relevance_score`` (float, higher = more
+  relevant); entries arrive in relevance order, so they must be mapped back
+  through ``index``. This is the cross-encoder shape served by reranking
+  models (production: qwen3-rerank-06b).
+
+Both modes share the same env gates, the same fail-open fallback, and the
+same output contract: retrieval ``score`` untouched, ``rerank_score`` added,
+``rank`` reassigned.
 """
 
 import os
@@ -48,6 +63,9 @@ RERANK_ENABLED = _env_flag("RERANK_ENABLED")
 RERANK_BASE_URL = (os.getenv("RERANK_BASE_URL") or "").rstrip("/")
 RERANK_MODEL = os.getenv("RERANK_MODEL") or ""
 RERANK_TIMEOUT_S = _env_float("RERANK_TIMEOUT_S", 3.0)
+# Wire shape: "rerank" = encoder /v1/rerank endpoint; anything else
+# (unset, unknown value) = the historical listwise /v1/systemone shape.
+RERANK_MODE = (os.getenv("RERANK_MODE") or "listwise").strip().lower()
 
 # Prompt shape verbatim from the public decision-model rerank benchmarks:
 # 4-level relevance rubric, lowest first; order passages by expected level.
@@ -63,7 +81,7 @@ _SCORE_CRITERIA = [
 ]
 
 
-def _build_payload(query: str, results: list) -> dict:
+def _build_listwise_payload(query: str, results: list) -> dict:
     """Listwise systemone payload: one state = query + all chunks, one score
     question per chunk (answered independently in a single batch)."""
     state = {
@@ -87,7 +105,7 @@ def _build_payload(query: str, results: list) -> dict:
     return payload
 
 
-def _parse_scores(data: dict, count: int) -> list:
+def _parse_listwise_scores(data: dict, count: int) -> list:
     """One float per question id (1..count) from a systemone response.
 
     Raises KeyError/TypeError/ValueError on any shape mismatch — the caller
@@ -97,8 +115,33 @@ def _parse_scores(data: dict, count: int) -> list:
     return [float(answers[str(i + 1)]["score"]) for i in range(count)]
 
 
+def _build_rerank_payload(query: str, results: list) -> dict:
+    """Encoder /v1/rerank payload: flat query + document texts in input
+    order; scoring is per (query, document) pair."""
+    return {
+        "model": RERANK_MODEL,
+        "query": query,
+        "documents": [r.get("content", "") for r in results],
+    }
+
+
+def _parse_rerank_scores(data: dict, count: int) -> list:
+    """One float per document position (0..count-1) from a /v1/rerank
+    response.
+
+    ``results[]`` arrives in relevance order, NOT input order — map back
+    through ``index``. Raises KeyError/TypeError/ValueError on any shape
+    mismatch (missing index, missing/garbage score, wrong count) — the
+    caller treats that as a reranker failure (add-on semantics: fall back).
+    """
+    scores = {}
+    for entry in data["results"]:
+        scores[int(entry["index"])] = float(entry["relevance_score"])
+    return [scores[i] for i in range(count)]
+
+
 def maybe_rerank(query: str, results: list) -> list:
-    """Rerank ``results`` by decision-model relevance, or return them as-is.
+    """Rerank ``results`` by model relevance, or return them as-is.
 
     Gate: disabled, unconfigured, or fewer than 2 results -> the SAME list,
     untouched (no HTTP, no copies, no rerank_score key).
@@ -110,15 +153,21 @@ def maybe_rerank(query: str, results: list) -> list:
         or len(results) < 2
     ):
         return results
-    url = f"{RERANK_BASE_URL}/upstream/{RERANK_MODEL}/v1/systemone"
-    payload = _build_payload(query, results)
+    if RERANK_MODE == "rerank":
+        url = f"{RERANK_BASE_URL}/upstream/{RERANK_MODEL}/v1/rerank"
+        payload = _build_rerank_payload(query, results)
+        parse = _parse_rerank_scores
+    else:
+        url = f"{RERANK_BASE_URL}/upstream/{RERANK_MODEL}/v1/systemone"
+        payload = _build_listwise_payload(query, results)
+        parse = _parse_listwise_scores
     try:
         with httpx.Client(
             timeout=httpx.Timeout(RERANK_TIMEOUT_S, connect=1.0)
         ) as client:
             resp = client.post(url, json=payload)
             resp.raise_for_status()
-            scores = _parse_scores(resp.json(), len(results))
+            scores = parse(resp.json(), len(results))
     except Exception as e:  # add-on semantics: ANY failure -> unranked path
         print(f"[RAG/02 reranker] disabled-fallback: {e}")
         return results  # original list object, unmodified, no rerank_score key
