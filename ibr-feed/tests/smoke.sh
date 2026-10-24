@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+script_dir=$(cd "$(dirname "$0")" && pwd)
+service_dir=$(cd "$script_dir/.." && pwd)
 root=$(mktemp -d)
 port=18743
 cleanup() {
@@ -45,13 +47,13 @@ EOF
 echo ignored > 'Entscheidungsgründe/ignored.md'
 git add .
 git commit -m fixture >/dev/null
-docker build -t ibr-feed-smoke .
-docker run -d --name ibr-feed-smoke -e IBR_GITHUB_PAT=dummy -e IBR_FEED_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -e IBR_REPO_URL="file://$root" -e IBR_DATA_DIR=/data -v "$root/data:/data" -p "127.0.0.1:$port:8000" ibr-feed-smoke >/dev/null
+docker build -f "$service_dir/Dockerfile" -t ibr-feed-smoke "$service_dir"
+docker run -d --name ibr-feed-smoke -e IBR_GITHUB_PAT=dummy -e IBR_FEED_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -e IBR_REPO_URL="file:///fixture" -e IBR_DATA_DIR=/data -v "$root:/fixture:ro" -v "$root/data:/data" -p "127.0.0.1:$port:8000" ibr-feed-smoke >/dev/null
 for attempt in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:$port/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/leitsaetze.atom" -o "$root/feed.atom"; then break; fi
   sleep 1
 done
-python - "$root/feed.atom" <<'PY'
+python3 - "$root/feed.atom" <<'PY'
 import sys, xml.etree.ElementTree as ET
 root = ET.parse(sys.argv[1]).getroot()
 ns = {"a": "http://www.w3.org/2005/Atom"}

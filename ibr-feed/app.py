@@ -27,11 +27,10 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 def _git(args, cwd=None):
     env = os.environ.copy()
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     helper = DATA_DIR / "git-askpass.sh"
-    helper.write_text('#!/bin/sh\ncase "$1" in *sername*) printf "x\\n" ;; *) printf "%s\\n" "$IBR_GITHUB_PAT" ;; esac\n')
+    helper.write_text('#!/bin/sh\ncase "$1" in *sername*) echo x ;; *) echo "$IBR_GITHUB_PAT" ;; esac\n')
     helper.chmod(0o700)
-    env.update(GIT_ASKPASS=str(helper), GIT_TERMINAL_PROMPT="0", IBR_GITHUB_PAT=PAT)
+    env.update(GIT_ASKPASS=str(helper), GIT_TERMINAL_PROMPT="0")
     env["IBR_GITHUB_PAT"] = PAT
     return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
 
@@ -40,7 +39,9 @@ def _dates(relpath):
     log = _git(["log", "--follow", "--format=%aI", "--", relpath], REPO_DIR).splitlines()
     if not log:
         raise ValueError(f"No history for {relpath}")
-    return log[-1], log[0]
+    first = _git(["log", "--follow", "--reverse", "--format=%aI", "--", relpath], REPO_DIR).splitlines()[0]
+    updated = _git(["log", "-1", "--format=%cI", "--", relpath], REPO_DIR)
+    return first, updated
 
 
 def _parse(path):
