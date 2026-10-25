@@ -138,36 +138,43 @@ model_list:
   # ==================== HERMES VIRTUAL MODELS ====================
   # Virtual aliases for hermes profiles — swap backing model HERE, not in profiles.
   # effort via extra_body: zai transform rejects top-level reasoning_effort (verified litellm 1.93.0).
-  # CHATGPT TRIAL 2026-10-24 -> ~2026-11-24 (.209 only): execute/tasks on
-  # chatgpt/gpt-6-luna (xhigh), plan on chatgpt/gpt-6.1-sol (high).
-  # Subscription auth via CHATGPT_TOKEN_DIR (shared, .209 only). Fallbacks:
-  # *-zai twins first, then hermes-fallback (deepseek-flash) — see below.
-  # Revert: point model: back at the -zai twins, or git revert the swap
-  # commit (pre-trial tag: chatgpt-trial-pre). Spend logs record 0 USD for
-  # chatgpt-backed virtuals (subscription quota, no per-token price).
+  # ChatGPT automatic-routing trial ended 2026-10-25: restore Z.ai defaults.
+  # Concrete ChatGPT models remain available for manual selection below.
   - model_name: hermes-tasks
     litellm_params:
-      model: chatgpt/gpt-6-luna
-      reasoning_effort: xhigh
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
       drop_params: true
-    model_info:
-      mode: responses
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
 
   - model_name: hermes-plan
     litellm_params:
-      model: chatgpt/gpt-6.1-sol
-      reasoning_effort: high
+      model: zai/glm-5.3
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
       drop_params: true
-    model_info:
-      mode: responses
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.0000014
+      output_cost_per_token: 0.0000044
+      cache_read_input_token_cost: 0.00000026
 
   - model_name: hermes-execute
     litellm_params:
-      model: chatgpt/gpt-6-luna
-      reasoning_effort: xhigh
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
       drop_params: true
-    model_info:
-      mode: responses
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
 
   # opencode plan-agent pin (zai/hermes-coding-plan) — thinking kwarg arrives
   # here too but drop_params drops it (group name not registry-known); future
@@ -229,9 +236,8 @@ model_list:
       output_cost_per_token: 0.0000006          # $0.60 / 1M off-peak (peak $1.20)
       cache_read_input_token_cost: 0.000000003  # $0.003 / 1M cache-hit (peak $0.006)
 
-  # CHATGPT TRIAL rollback twins (2026-10-24, trial ends ~2026-11-24):
-  # exact pre-trial configs of hermes-plan/execute/tasks; fallback targets
-  # during the trial + instant rollback (point the virtual's model: here).
+  # Compatibility twins retained after the ChatGPT routing trial ended.
+  # To restore a primary, COPY the complete params block; aliases are not upstream IDs.
   # Pre-trial state also preserved as git tag chatgpt-trial-pre (commit 8273169).
   - model_name: hermes-plan-zai
     litellm_params:
@@ -481,9 +487,8 @@ model_list:
     model_info:
       mode: responses
 
-  # Manual escalation only during the trial — NOT wired to any virtual:
-  # burns the shared 5h pool ~4-10x faster than sol (quota math in vault
-  # shared/research/261024_chatgpt-codex-models-quota).
+  # Manual-only ChatGPT choices; no forced reasoning effort.
+  # All three share the subscription's quota pool.
   - model_name: chatgpt-gpt-6-astra
     litellm_params:
       model: chatgpt/gpt-6-astra
@@ -509,12 +514,9 @@ litellm_settings:
     # Failover/recovery pings via fallback_notify.py (gotify). hermes-vision gets no
     # pair: it IS deepseek-flash already. `fallbacks:` is a LIST of single-key mappings.
     fallbacks:
-      # ChatGPT trial (2026-10-24): 2-hop — subscription-backed virtuals fall
-      # back to their zai twin first (quota exhaustion / upstream errors),
-      # deepseek-flash (hermes-fallback) stays the final hop for all.
-      - hermes-plan: ["hermes-plan-zai", "hermes-fallback"]
-      - hermes-execute: ["hermes-execute-zai", "hermes-fallback"]
-      - hermes-tasks: ["hermes-tasks-zai", "hermes-fallback"]
+      - hermes-plan: ["hermes-fallback"]
+      - hermes-execute: ["hermes-fallback"]
+      - hermes-tasks: ["hermes-fallback"]
       - hermes-coding-plan: ["hermes-fallback"]
       - hermes-coding-execute: ["hermes-fallback"]
     num_retries: 3                  # Default number of retries per request before giving up
