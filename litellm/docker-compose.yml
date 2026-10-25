@@ -1,6 +1,6 @@
 services:
   litellm:
-    image: docker.litellm.ai/berriai/litellm:main-latest
+    image: docker.litellm.ai/berriai/litellm:main-latest@sha256:7294b90f868c5c38c99b83021c7ba46f9b439e95f8e32964c925c7d2563a03f7
     container_name: litellm-proxy
 #    ports:
 #      - "4000:4000"
