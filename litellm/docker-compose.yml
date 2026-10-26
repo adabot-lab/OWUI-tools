@@ -9,6 +9,7 @@ services:
       - ./config/strip_hermes.py:/app/strip_hermes.py:ro  # callback module referenced by config.yml
       - ./config/fallback_notify.py:/app/fallback_notify.py:ro  # callback module referenced by config.yml
       - ./config/strip_thinking.py:/app/strip_thinking.py:ro  # callback module referenced by config.yml
+      - ./config/codex_session_id.py:/app/codex_session_id.py:ro  # callback module referenced by config.yml
     env_file:
       - .env
     environment:
