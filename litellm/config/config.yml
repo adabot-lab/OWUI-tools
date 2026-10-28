@@ -416,6 +416,31 @@ model_list:
       model: mistral/mistral-medium-latest
       api_key: os.environ/MISTRAL_API_KEY
 
+  # --- Mistral "Vibe" key (MISTRAL_VIBE_KEY, separate allowance/key from
+  # MISTRAL_API_KEY; user-added to .209 litellm/.env 2026-10-28) ---
+  # Third-party coding models hosted & served by Mistral in the EU.
+  # Prices: docs.mistral.ai/inference/pricing, checked 2026-10-28.
+  # Group names dash-prefixed → NOT registry-known → unknown client params
+  # dropped via drop_params (zai thinking-kwarg discipline, litellm #31084/#31085).
+  # NOTE: entries valid on .209 only until oracle litellm/.env gains MISTRAL_VIBE_KEY.
+  - model_name: mistral-vibe-glm-5.3-flash(0.15/0.5)
+    litellm_params:
+      model: mistral/zai-glm-5-3-flash
+      api_key: os.environ/MISTRAL_VIBE_KEY
+      drop_params: true
+      input_cost_per_token: 0.00000015         # $0.15 / 1M
+      output_cost_per_token: 0.0000005         # $0.50 / 1M
+      cache_read_input_token_cost: 0.00000003  # $0.03 / 1M cached
+
+  - model_name: mistral-vibe-deepseek-v4.1-flash(0.3/1.2)
+    litellm_params:
+      model: mistral/deepseek-v4-1-flash-1017
+      api_key: os.environ/MISTRAL_VIBE_KEY
+      drop_params: true
+      input_cost_per_token: 0.0000003          # $0.30 / 1M
+      output_cost_per_token: 0.0000012         # $1.20 / 1M
+      cache_read_input_token_cost: 0.000000007 # $0.007 / 1M cached
+
   # ==================== GOOGLE / GEMINI ====================
 
   - model_name: google-gemini-3-flash-preview
