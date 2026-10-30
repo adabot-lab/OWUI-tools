@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -23,6 +24,37 @@ FEED_TOKEN = os.getenv("IBR_FEED_TOKEN", "")
 REPO_DIR = DATA_DIR / "repo"
 FEED_FILE = DATA_DIR / "leitsaetze.atom"
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+REDACTED_PATH = "/<redacted>/leitsaetze.atom"
+_TOKEN_URL = re.compile(r"^/([^/]+)/leitsaetze\.atom$")
+
+
+class RedactTokenMiddleware:
+    """Redact the feed token from every log that reads the ASGI scope.
+
+    uvicorn's access logger formats its line from scope["raw_path"] /
+    scope["path"] of the very dict it handed to the application, but only
+    once the response completes. Rewriting both keys here -- pure ASGI,
+    before the router runs -- therefore changes what uvicorn logs, while a
+    response-side middleware never could. The original token survives in a
+    private scope key that no client can inject; the route compares it with
+    the same constant-time hmac.compare_digest as before.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            match = _TOKEN_URL.match(scope.get("path", ""))
+            if match:
+                scope["ibr_original_token"] = match.group(1)
+                scope["path"] = REDACTED_PATH
+                scope["raw_path"] = REDACTED_PATH.encode()
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(RedactTokenMiddleware)
 
 
 def _git(args, cwd=None):
@@ -128,15 +160,14 @@ def healthz():
     return {"status": "ok"}
 
 
-@app.get("/{token}/leitsaetze.atom")
-def atom(token: str, request: Request):
+@app.get("/<redacted>/leitsaetze.atom")
+def atom(request: Request):
+    # The router only ever sees REDACTED_PATH; the real token arrives in the
+    # private scope key set by RedactTokenMiddleware. Unknown key => request
+    # never carried a token path => fail closed with 404.
+    token = request.scope.get("ibr_original_token", "")
     if not hmac.compare_digest(hashlib.sha256(token.encode()).digest(), hashlib.sha256(FEED_TOKEN.encode()).digest()):
         raise HTTPException(status_code=404)
     if not FEED_FILE.exists():
         raise HTTPException(status_code=503)
     return Response(FEED_FILE.read_bytes(), media_type="application/atom+xml")
-
-
-@app.middleware("http")
-async def redact_paths(request: Request, call_next):
-    return await call_next(request)

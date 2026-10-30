@@ -4,6 +4,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
+COPY tests/ tests/
 ENV IBR_DATA_DIR=/data
 VOLUME ["/data"]
 EXPOSE 8000

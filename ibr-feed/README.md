@@ -14,4 +14,4 @@ Replace `IBR_GITHUB_PAT` in the deployment environment with a newly scoped, read
 
 ## Scope and tests
 
-The directory name `Leitsätze` is intentionally hardcoded. No other corpus paths are read. Run mandatory tests in Docker with `docker compose run --rm --build ibr-feed pytest -q`; the integration smoke test uses a temporary fixture Git repository and publishes a temporary localhost port only for the test.
+The directory name `Leitsätze` is intentionally hardcoded. No other corpus paths are read. Run mandatory tests in Docker with `docker compose run --rm --build ibr-feed pytest -q`; the integration smoke test uses a temporary fixture Git repository and publishes a temporary localhost port only for the test. Access-log redaction is enforced by tests and smoke: uvicorn must never log the feed token, only the `/<redacted>/leitsaetze.atom` path (percent-encoded by uvicorn as `/%3Credacted%3E/`).
