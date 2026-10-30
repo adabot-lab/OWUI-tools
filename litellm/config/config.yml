@@ -138,6 +138,8 @@ model_list:
   # ==================== HERMES VIRTUAL MODELS ====================
   # Virtual aliases for hermes profiles — swap backing model HERE, not in profiles.
   # effort via extra_body: zai transform rejects top-level reasoning_effort (verified litellm 1.93.0).
+  # ChatGPT automatic-routing trial ended 2026-10-25: restore Z.ai defaults.
+  # Concrete ChatGPT models remain available for manual selection below.
   - model_name: hermes-tasks
     litellm_params:
       model: zai/glm-5.3-flash
@@ -206,28 +208,72 @@ model_list:
 
   - model_name: hermes-vision
     litellm_params:
-      model: openai/deepseek-v4-flash-vision-exp
+      model: openai/deepseek-flash
       api_base: https://api.deepseek.com/v1
       api_key: os.environ/DEEPSEEK_API_KEY
       drop_params: true
-      # no reasoning setting; pricing = deepseek-v4-flash (v4 schedule 2026-08-31,
-      # peak/off-peak — encoded off-peak, see DEEPSEEK section note above)
-      input_cost_per_token: 0.00000022          # $0.22 / 1M off-peak (peak $0.44)
-      output_cost_per_token: 0.00000066         # $0.66 / 1M off-peak (peak $1.32)
-      cache_read_input_token_cost: 0.000000007  # $0.007 / 1M cache-hit (peak $0.014)
+      # no reasoning setting; backing = deepseek-flash = DeepSeek-V4.1-Flash
+      # (current id, checked 2026-10-13; retired deepseek-v4-flash-vision-exp
+      # is still answered upstream = rollback name). Pricing checked 2026-10-13
+      # (api-docs.deepseek.com/quick_start/pricing) — flash peak/off-peak
+      # schedule, encoded off-peak, see DEEPSEEK section note above.
+      input_cost_per_token: 0.00000015          # $0.15 / 1M off-peak (peak $0.30)
+      output_cost_per_token: 0.0000006          # $0.60 / 1M off-peak (peak $1.20)
+      cache_read_input_token_cost: 0.000000003  # $0.003 / 1M cache-hit (peak $0.006)
 
   # Virtual alias for the hermes fallback tier (fallback_providers #1 in all
   # hermes configs, via LITELLM_FALLBACK_API_KEY). Backing swappable HERE —
-  # same params as hermes-vision / deepseek-v4-flash-vision-exp above.
+  # same params as hermes-vision / deepseek-flash above.
   - model_name: hermes-fallback
     litellm_params:
-      model: openai/deepseek-v4-flash-vision-exp
+      model: openai/deepseek-flash
       api_base: https://api.deepseek.com/v1
       api_key: os.environ/DEEPSEEK_API_KEY
       drop_params: true
-      input_cost_per_token: 0.00000022          # $0.22 / 1M off-peak (peak $0.44)
-      output_cost_per_token: 0.00000066         # $0.66 / 1M off-peak (peak $1.32)
-      cache_read_input_token_cost: 0.000000007  # $0.007 / 1M cache-hit (peak $0.014)
+      # pricing = deepseek-flash off-peak (checked 2026-10-13, same schedule
+      # as hermes-vision above; peak x2 calls under-count in spend logs)
+      input_cost_per_token: 0.00000015          # $0.15 / 1M off-peak (peak $0.30)
+      output_cost_per_token: 0.0000006          # $0.60 / 1M off-peak (peak $1.20)
+      cache_read_input_token_cost: 0.000000003  # $0.003 / 1M cache-hit (peak $0.006)
+
+  # Compatibility twins retained after the ChatGPT routing trial ended.
+  # To restore a primary, COPY the complete params block; aliases are not upstream IDs.
+  # Pre-trial state also preserved as git tag chatgpt-trial-pre (commit 8273169).
+  - model_name: hermes-plan-zai
+    litellm_params:
+      model: zai/glm-5.3
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.0000014
+      output_cost_per_token: 0.0000044
+      cache_read_input_token_cost: 0.00000026
+
+  - model_name: hermes-execute-zai
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
+
+  - model_name: hermes-tasks-zai
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
 
   # ==================== OPENROUTER ====================
 
@@ -370,6 +416,31 @@ model_list:
       model: mistral/mistral-medium-latest
       api_key: os.environ/MISTRAL_API_KEY
 
+  # --- Mistral "Vibe" key (MISTRAL_VIBE_KEY, separate allowance/key from
+  # MISTRAL_API_KEY; user-added to .209 litellm/.env 2026-10-28) ---
+  # Third-party coding models hosted & served by Mistral in the EU.
+  # Prices: docs.mistral.ai/inference/pricing, checked 2026-10-28.
+  # Group names dash-prefixed → NOT registry-known → unknown client params
+  # dropped via drop_params (zai thinking-kwarg discipline, litellm #31084/#31085).
+  # NOTE: entries valid on .209 only until oracle litellm/.env gains MISTRAL_VIBE_KEY.
+  - model_name: mistral-vibe-glm-5.3-flash(0.15/0.5)
+    litellm_params:
+      model: mistral/zai-glm-5-3-flash
+      api_key: os.environ/MISTRAL_VIBE_KEY
+      drop_params: true
+      input_cost_per_token: 0.00000015         # $0.15 / 1M
+      output_cost_per_token: 0.0000005         # $0.50 / 1M
+      cache_read_input_token_cost: 0.00000003  # $0.03 / 1M cached
+
+  - model_name: mistral-vibe-deepseek-v4.1-flash(0.3/1.2)
+    litellm_params:
+      model: mistral/deepseek-v4-1-flash-1017
+      api_key: os.environ/MISTRAL_VIBE_KEY
+      drop_params: true
+      input_cost_per_token: 0.0000003          # $0.30 / 1M
+      output_cost_per_token: 0.0000012         # $1.20 / 1M
+      cache_read_input_token_cost: 0.000000007 # $0.007 / 1M cached
+
   # ==================== GOOGLE / GEMINI ====================
 
   - model_name: google-gemini-3-flash-preview
@@ -413,6 +484,42 @@ model_list:
 #      api_base: os.environ/DASHSCOPE_API_BASE
 
 
+  # ==================== CHATGPT SUBSCRIPTION (Codex backend) ====================
+  # ChatGPT Plus subscription (not OpenAI API) via litellm's chatgpt/ provider.
+  # Auth: ONE shared auth.json at CHATGPT_TOKEN_DIR (/app/chatgpt-auth inside the
+  # container; host dir litellm/chatgpt-auth, gitignored). Login is OAuth device
+  # flow, done OUTSIDE the proxy; the refresh token is single-use and the file is
+  # rewritten on refresh -> exactly ONE host may hold a copy. .209 only; the
+  # oracle proxy has no auth file and serves these models as unavailable.
+  # Endpoint: Responses API. /v1/chat/completions is bridged to Responses.
+  # No cost-map price -> spend logs record $0 (subscription quota, not per-token
+  # billing); token counts are still attributed. Use rpm_limit/tpm_limit on keys
+  # for caps if needed.
+  # Model IDs + quota checked against developers.openai.com/codex/{models,
+  # pricing} on 2026-10-24 — all three usable on Plus (est. local msgs/5h:
+  # astra 5-45, sol 15-160, luna 350-3000; ONE shared pool per 5h window +
+  # unpublished weekly limits; shared with the human's own ChatGPT usage).
+  # Retired: gpt-5.4, gpt-5.5.
+  - model_name: chatgpt-gpt-6.1-sol
+    litellm_params:
+      model: chatgpt/gpt-6.1-sol
+    model_info:
+      mode: responses
+
+  - model_name: chatgpt-gpt-6-luna
+    litellm_params:
+      model: chatgpt/gpt-6-luna
+    model_info:
+      mode: responses
+
+  # Manual-only ChatGPT choices; no forced reasoning effort.
+  # All three share the subscription's quota pool.
+  - model_name: chatgpt-gpt-6-astra
+    litellm_params:
+      model: chatgpt/gpt-6-astra
+    model_info:
+      mode: responses
+
 # ==================== GENERAL SETTINGS ====================
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
@@ -425,10 +532,18 @@ general_settings:
 litellm_settings:
     modify_params: true            # Auto-handle missing reasoning_content/thinking_blocks in multi-turn conversations
     check_provider_endpoint: true   # Queries upstream provider's /models endpoint to resolve wildcards (e.g. openai/*)
-#    fallbacks:                      # When a model fails all retries, fall back to these alternatives
-#      - zai-glm-5.1: ["deepseek-v4-flash(0.14/0.28)"]
-#      - deepseek-v4-flash(0.14/0.28): ["openrouter-deepseek-v4-flash(0.14/0.28)"]
-#      - deepseek-v4-pro(0.435/0.87): ["openrouter-deepseek-v4-flash(0.14/0.28)"]
+    # Production failover pairs (2026-10-16): zai-backed hermes virtuals fall back to
+    # hermes-fallback (= openai/deepseek-flash, pay-per-token) INSIDE the proxy.
+    # The hermes-side tier-1 fallback was removed the same day; hermes profiles now
+    # fall back only to local llamacpp when the proxy itself is unreachable.
+    # Failover/recovery pings via fallback_notify.py (gotify). hermes-vision gets no
+    # pair: it IS deepseek-flash already. `fallbacks:` is a LIST of single-key mappings.
+    fallbacks:
+      - hermes-plan: ["hermes-fallback"]
+      - hermes-execute: ["hermes-fallback"]
+      - hermes-tasks: ["hermes-fallback"]
+      - hermes-coding-plan: ["hermes-fallback"]
+      - hermes-coding-execute: ["hermes-fallback"]
     num_retries: 3                  # Default number of retries per request before giving up
     request_timeout: 300            # Max total time (seconds) for any request before timing out
     cooldown_time: 600              # how long to skip a deployment after too many failures
@@ -445,6 +560,7 @@ litellm_settings:
       - strip_hermes.strip_hermes_handler
       - fallback_notify.fallback_notifier
       - strip_thinking.strip_thinking_handler  # pop client-sent `thinking` for zai-backed groups (litellm #31084/#31085, opencode 1.17.9 always sends it)
+      - codex_session_id.codex_session_id_hook  # stable sharded session ids for chatgpt/* groups -> backend prompt-cache reuse (plan 261026)
 
 
       # Optional: Disable SSL verification for self-signed certificates

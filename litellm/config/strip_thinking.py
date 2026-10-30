@@ -53,9 +53,12 @@ class StripThinkingHandler(CustomLogger):
             "zai-glm-5.3",
             "zai-glm-5.3-flash",
             "glm-5.3-flash",
-            "hermes-tasks",
             "hermes-plan",
             "hermes-execute",
+            "hermes-tasks",
+            "hermes-plan-zai",
+            "hermes-execute-zai",
+            "hermes-tasks-zai",
             "hermes-coding-plan",
             "hermes-coding-execute",
         }

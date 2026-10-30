@@ -49,6 +49,9 @@ openterminal/data/
 python-bash/workspace/
 websearch-mcp/browser-profile/
 
+# --- ChatGPT subscription OAuth tokens (litellm chatgpt/ provider) ---
+litellm/chatgpt-auth/
+
 # --- Python bytecode / cache ---
 __pycache__/
 *.py[cod]
