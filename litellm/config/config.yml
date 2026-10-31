@@ -176,24 +176,27 @@ model_list:
       output_cost_per_token: 0.0000005
       cache_read_input_token_cost: 0.00000003
 
-  # opencode plan-agent pin (zai/hermes-coding-plan) — thinking kwarg arrives
-  # here too but drop_params drops it (group name not registry-known); future
-  # model bump = one `model:` edit here. reasoning_effort tunable per-entry,
-  # independently of hermes-coding-execute.
+  # Legacy coding pair (opencode repinned to hermes-plan/hermes-tasks
+  # 2026-10-31); kept as manual/rollback names on the main-key allowlist.
+  # Backing moved to FULL glm-5.3 2026-10-31 (user-directed — plan-grade
+  # reasoning on the coding-plan lane; research note 261020_LLM-plan-research,
+  # 2026-10-31 addendum). effort stays high (glm-5.3 lane rec = high).
   - model_name: hermes-coding-plan
     litellm_params:
-      model: zai/glm-5.3-flash
+      model: zai/glm-5.3
       api_key: os.environ/ZAI_API_KEY
       api_base: os.environ/ZAI_API_BASE
       drop_params: true
       extra_body:
         reasoning_effort: high
-      input_cost_per_token: 0.00000015
-      output_cost_per_token: 0.0000005
-      cache_read_input_token_cost: 0.00000003
+      input_cost_per_token: 0.0000014          # $1.40 / 1M (glm-5.3 list)
+      output_cost_per_token: 0.0000044         # $4.40 / 1M
+      cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached input
 
-  # opencode build-agent pin (zai/hermes-coding-execute) — same backing as
-  # hermes-coding-plan; effort independently tunable (currently medium).
+  # hermes-coding-execute — effort medium→high 2026-10-31: GLM-5.3(-Flash) has
+  # NO medium (enum low/high/max); out-of-enum values silently fall back to the
+  # DEFAULT MAX (research note 261020_LLM-plan-research, 2026-10-31 addendum)
+  # — medium was accidentally the worst case, not a saving.
   - model_name: hermes-coding-execute
     litellm_params:
       model: zai/glm-5.3-flash
@@ -201,7 +204,7 @@ model_list:
       api_base: os.environ/ZAI_API_BASE
       drop_params: true
       extra_body:
-        reasoning_effort: medium
+        reasoning_effort: high
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.0000005
       cache_read_input_token_cost: 0.00000003
@@ -230,11 +233,59 @@ model_list:
       api_base: https://api.deepseek.com/v1
       api_key: os.environ/DEEPSEEK_API_KEY
       drop_params: true
+      extra_body:
+        reasoning_effort: high   # explicit pin 2026-10-31 (user-directed; deepseek
+                                 # default is high too — pin survives an upstream
+                                 # default change). Serves full agent lanes on failover.
       # pricing = deepseek-flash off-peak (checked 2026-10-13, same schedule
       # as hermes-vision above; peak x2 calls under-count in spend logs)
       input_cost_per_token: 0.00000015          # $0.15 / 1M off-peak (peak $0.30)
       output_cost_per_token: 0.0000006          # $0.60 / 1M off-peak (peak $1.20)
       cache_read_input_token_cost: 0.000000003  # $0.003 / 1M cache-hit (peak $0.006)
+
+  # ---- Heartbeat lane twins (2026-10-31, user-directed) ----
+  # Same backings + efforts as their primary lanes. Two roles: (a) hop-1
+  # proxy-side fallback targets for the primaries (same upstream, separate
+  # deployment = separate cooldown bucket); (b) dedicated names for
+  # high-frequency heartbeat/cron traffic so it is routable + monitorable
+  # separately in spend logs. Deliberately NO fallbacks of their own (see
+  # litellm_settings.fallbacks): if zai is out, heartbeat calls fail instead
+  # of silently burning deepseek PAYG. Efforts mirror the primaries (high).
+  - model_name: hermes-heartbeat-plan
+    litellm_params:
+      model: zai/glm-5.3
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.0000014          # $1.40 / 1M (glm-5.3 list)
+      output_cost_per_token: 0.0000044         # $4.40 / 1M
+      cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached input
+
+  - model_name: hermes-heartbeat-execute
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
+
+  - model_name: hermes-heartbeat-tasks
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      extra_body:
+        reasoning_effort: high
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.0000005
+      cache_read_input_token_cost: 0.00000003
 
   # Compatibility twins retained after the ChatGPT routing trial ended.
   # To restore a primary, COPY the complete params block; aliases are not upstream IDs.
@@ -532,18 +583,24 @@ general_settings:
 litellm_settings:
     modify_params: true            # Auto-handle missing reasoning_content/thinking_blocks in multi-turn conversations
     check_provider_endpoint: true   # Queries upstream provider's /models endpoint to resolve wildcards (e.g. openai/*)
-    # Production failover pairs (2026-10-16): zai-backed hermes virtuals fall back to
-    # hermes-fallback (= openai/deepseek-flash, pay-per-token) INSIDE the proxy.
-    # The hermes-side tier-1 fallback was removed the same day; hermes profiles now
-    # fall back only to local llamacpp when the proxy itself is unreachable.
-    # Failover/recovery pings via fallback_notify.py (gotify). hermes-vision gets no
-    # pair: it IS deepseek-flash already. `fallbacks:` is a LIST of single-key mappings.
+    # Production failover — 2-hop chains since 2026-10-31 (user-directed):
+    # primary zai lane -> heartbeat twin (same upstream, separate deployment =
+    # separate cooldown bucket) -> hermes-fallback (openai/deepseek-flash,
+    # pay-per-token) INSIDE the proxy. hermes-heartbeat-* deliberately get NO
+    # chain of their own: if zai is out, heartbeat calls fail instead of
+    # silently burning deepseek PAYG. Ordered in-list iteration verified on
+    # litellm v1.103.2 (router_utils/fallback_event_handlers.py::
+    # run_async_fallback `for mg in fallback_model_group`, first success wins;
+    # a hop with no fallback entry propagates to the next list entry).
+    # hermes-vision gets no chain: it IS deepseek-flash already.
+    # `fallbacks:` is a LIST of single-key mappings. Failover/recovery pings
+    # via fallback_notify.py (gotify).
     fallbacks:
-      - hermes-plan: ["hermes-fallback"]
-      - hermes-execute: ["hermes-fallback"]
-      - hermes-tasks: ["hermes-fallback"]
-      - hermes-coding-plan: ["hermes-fallback"]
-      - hermes-coding-execute: ["hermes-fallback"]
+      - hermes-plan: ["hermes-heartbeat-plan", "hermes-fallback"]
+      - hermes-execute: ["hermes-heartbeat-execute", "hermes-fallback"]
+      - hermes-tasks: ["hermes-heartbeat-tasks", "hermes-fallback"]
+      - hermes-coding-plan: ["hermes-heartbeat-plan", "hermes-fallback"]
+      - hermes-coding-execute: ["hermes-heartbeat-execute", "hermes-fallback"]
     num_retries: 3                  # Default number of retries per request before giving up
     request_timeout: 300            # Max total time (seconds) for any request before timing out
     cooldown_time: 600              # how long to skip a deployment after too many failures

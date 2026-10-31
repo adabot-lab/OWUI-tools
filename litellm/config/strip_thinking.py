@@ -61,6 +61,9 @@ class StripThinkingHandler(CustomLogger):
             "hermes-tasks-zai",
             "hermes-coding-plan",
             "hermes-coding-execute",
+            "hermes-heartbeat-plan",
+            "hermes-heartbeat-execute",
+            "hermes-heartbeat-tasks",
         }
     )
 
