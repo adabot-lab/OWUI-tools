@@ -489,8 +489,13 @@ model_list:
   # Auth: ONE shared auth.json at CHATGPT_TOKEN_DIR (/app/chatgpt-auth inside the
   # container; host dir litellm/chatgpt-auth, gitignored). Login is OAuth device
   # flow, done OUTSIDE the proxy; the refresh token is single-use and the file is
-  # rewritten on refresh -> exactly ONE host may hold a copy. .209 only; the
-  # oracle proxy has no auth file and serves these models as unavailable.
+  # rewritten on refresh -> exactly ONE host may hold a copy. .209 only.
+  # GROUPS COMMENTED OUT on main 2026-11-05 (plan 261103_oracle163_litellm_remediation_design):
+  # oracle serves chatgpt nowhere; with no auth on oracle these groups made
+  # restarts crash-loop (stale container, ImportError on codex_session_id) and,
+  # after the 2026-11-05 recreate, failed every chatgpt request with a device-code
+  # login error. chatgpt is .209/dev-only until the subscription ends.
+  # Re-activation: uncomment groups + callback line, fresh OAuth on .209 only.
   # Endpoint: Responses API. /v1/chat/completions is bridged to Responses.
   # No cost-map price -> spend logs record $0 (subscription quota, not per-token
   # billing); token counts are still attributed. Use rpm_limit/tpm_limit on keys
@@ -500,25 +505,25 @@ model_list:
   # astra 5-45, sol 15-160, luna 350-3000; ONE shared pool per 5h window +
   # unpublished weekly limits; shared with the human's own ChatGPT usage).
   # Retired: gpt-5.4, gpt-5.5.
-  - model_name: chatgpt-gpt-6.1-sol
-    litellm_params:
-      model: chatgpt/gpt-6.1-sol
-    model_info:
-      mode: responses
+#   - model_name: chatgpt-gpt-6.1-sol
+#     litellm_params:
+#       model: chatgpt/gpt-6.1-sol
+#     model_info:
+#       mode: responses
 
-  - model_name: chatgpt-gpt-6-luna
-    litellm_params:
-      model: chatgpt/gpt-6-luna
-    model_info:
-      mode: responses
+#   - model_name: chatgpt-gpt-6-luna
+#     litellm_params:
+#       model: chatgpt/gpt-6-luna
+#     model_info:
+#       mode: responses
 
-  # Manual-only ChatGPT choices; no forced reasoning effort.
-  # All three share the subscription's quota pool.
-  - model_name: chatgpt-gpt-6-astra
-    litellm_params:
-      model: chatgpt/gpt-6-astra
-    model_info:
-      mode: responses
+#   # Manual-only ChatGPT choices; no forced reasoning effort.
+#   # All three share the subscription's quota pool.
+#   - model_name: chatgpt-gpt-6-astra
+#     litellm_params:
+#       model: chatgpt/gpt-6-astra
+#     model_info:
+#       mode: responses
 
 # ==================== GENERAL SETTINGS ====================
 general_settings:
@@ -560,7 +565,7 @@ litellm_settings:
       - strip_hermes.strip_hermes_handler
       - fallback_notify.fallback_notifier
       - strip_thinking.strip_thinking_handler  # pop client-sent `thinking` for zai-backed groups (litellm #31084/#31085, opencode 1.17.9 always sends it)
-      - codex_session_id.codex_session_id_hook  # stable sharded session ids for chatgpt/* groups -> backend prompt-cache reuse (plan 261026)
+      # - codex_session_id.codex_session_id_hook  # stable sharded session ids for chatgpt/* groups -> backend prompt-cache reuse (plan 261026)  # commented out with chatgpt groups 2026-11-05 (no chatgpt groups on main)
 
 
       # Optional: Disable SSL verification for self-signed certificates
