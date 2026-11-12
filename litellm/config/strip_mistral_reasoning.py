@@ -68,6 +68,10 @@ class StripMistralReasoningHandler(CustomLogger):
             "mistral-vibe-mistral-large-4(0.7/2.1)",
             # Direct Mistral key (same api.mistral.ai strict schema):
             "mistral-mistral-large(0.5/1.5)",
+            # Voxtral audio (2026-11-12): mistral-backed TTS/STT groups; the
+            # hook is a no-op for non-chat call_types, membership kept for sync.
+            "voxtral-mini-tts-2603",
+            "voxtral-mini-latest",
         }
     )
 

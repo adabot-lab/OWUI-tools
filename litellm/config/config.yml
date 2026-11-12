@@ -301,6 +301,40 @@ model_list:
       output_cost_per_token: 0.0000021         # $2.10 / 1M
       cache_read_input_token_cost: 0.00000007  # $0.07 / 1M cached
 
+  # --- Voxtral audio: TTS + batch STT (added 2026-11-12, config-only; the
+  # litellm pin stays v1.103.2 — TTS needs >= v1.102.0, batch STT older) ---
+  # TTS via POST /v1/audio/speech. Voice: OpenAI names map onto Mistral voices
+  # (alloy -> en_paul_neutral); native Mistral voice ids pass through. speed and
+  # instructions are dropped (Mistral 422s on them). Explicit pricing matches the
+  # v1.103.2 built-in cost map entry mistral/voxtral-mini-tts-2603: $16 / 1M chars
+  # (Opper live catalogue 2026-11-10: $16 global route). NOTE: Mistral's pricing
+  # page now lists only the newer Voxtral TTS 3 (voxtral-mini-tts-3-0) at
+  # $13 / 1M chars — if the 2603 snapshot is billed at that too, spend logs
+  # over-count ~23% (conservative direction; re-check on next pricing pass).
+  - model_name: voxtral-mini-tts-2603
+    litellm_params:
+      model: mistral/voxtral-mini-tts-2603
+      api_key: os.environ/MISTRAL_API_KEY
+      drop_params: true
+      input_cost_per_character: 0.000016       # $16 / 1M chars (see note above)
+    model_info:
+      mode: audio_speech
+
+  # Batch STT via POST /v1/audio/transcriptions. Realtime STT is NOT proxyable
+  # through litellm (WebSocket; clients hit wss://api.mistral.ai directly —
+  # user-accepted 2026-11-12). voxtral-mini-latest naming is the safe one on pin
+  # v1.103.2. Pricing = Mistral list price $0.003 / min (models.litellm.ai +
+  # SpeechRouter, checked 2026-11-12; the $0.0035 / min figure is the newer
+  # Voxtral Mini Transcribe 3). Matches the built-in cost map (5e-05 $/s).
+  - model_name: voxtral-mini-latest
+    litellm_params:
+      model: mistral/voxtral-mini-latest
+      api_key: os.environ/MISTRAL_API_KEY
+      drop_params: true
+      input_cost_per_second: 0.00005          # $0.003 / min
+    model_info:
+      mode: audio_transcription
+
   # ==================== GOOGLE / GEMINI ====================
 
   - model_name: google-gemini-3-flash-preview
