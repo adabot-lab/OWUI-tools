@@ -37,6 +37,16 @@ historical behavior, so pre-RERANK_MODE deployments keep working):
 Both modes share the same env gates, the same fail-open fallback, and the
 same output contract: retrieval ``score`` untouched, ``rerank_score`` added,
 ``rank`` reassigned.
+
+Latency (production top_k=10 fix, 2026-11-13): rerank cost on the CPU-only
+.208 endpoint scales with total scored tokens (measured ~1.1 s per ~1000-char
+doc, roughly linear in doc count and length). Full-length 10-doc payloads
+take 13-20 s — over ``RERANK_TIMEOUT_S=10`` and the 15 s MCP budget, so
+every production call silently fell back unranked. Fix: truncate each
+document to ``RERANK_MAX_CHARS`` before scoring (head truncation — the
+A/B eval showed the reranker's judgment is driven by chunk heads), which
+brings the endpoint to ~5-6 s for 10 docs. Truncation applies to the
+SCORING PAYLOAD only; served ``content`` stays full-length.
 """
 
 import os
@@ -55,6 +65,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 # Configuration — os.getenv defaults, same pattern as retrieval_engine.py.
 # OPTIONAL tuning knobs: NEVER add these to validate_required_env(); a
 # missing or malformed value must degrade to "reranker off", never break
@@ -66,6 +83,12 @@ RERANK_TIMEOUT_S = _env_float("RERANK_TIMEOUT_S", 3.0)
 # Wire shape: "rerank" = encoder /v1/rerank endpoint; anything else
 # (unset, unknown value) = the historical listwise /v1/systemone shape.
 RERANK_MODE = (os.getenv("RERANK_MODE") or "listwise").strip().lower()
+# Per-document head truncation applied to the rerank SCORING payload only
+# (served content is untouched). 0/negative/empty = no truncation. Tuned for
+# the production top_k=10 budget: ~10 x 500 chars scores in ~5-6 s on the
+# CPU-only rerank endpoint, inside RERANK_TIMEOUT_S=10 and the 15 s MCP
+# latency budget.
+RERANK_MAX_CHARS = _env_int("RERANK_MAX_CHARS", 0)
 
 # Prompt shape verbatim from the public decision-model rerank benchmarks:
 # 4-level relevance rubric, lowest first; order passages by expected level.
@@ -81,13 +104,20 @@ _SCORE_CRITERIA = [
 ]
 
 
+def _truncate(text: str) -> str:
+    """Head-truncate one document for the scoring payload (RERANK_MAX_CHARS)."""
+    if RERANK_MAX_CHARS > 0 and len(text) > RERANK_MAX_CHARS:
+        return text[:RERANK_MAX_CHARS]
+    return text
+
+
 def _build_listwise_payload(query: str, results: list) -> dict:
     """Listwise systemone payload: one state = query + all chunks, one score
     question per chunk (answered independently in a single batch)."""
     state = {
         "query": query,
         "passages": [
-            {"id": i + 1, "text": r.get("content", "")}
+            {"id": i + 1, "text": _truncate(r.get("content", ""))}
             for i, r in enumerate(results)
         ],
     }
@@ -121,7 +151,7 @@ def _build_rerank_payload(query: str, results: list) -> dict:
     return {
         "model": RERANK_MODEL,
         "query": query,
-        "documents": [r.get("content", "") for r in results],
+        "documents": [_truncate(r.get("content", "")) for r in results],
     }
 
 
