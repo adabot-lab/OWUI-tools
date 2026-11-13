@@ -21,6 +21,9 @@ services:
     environment:
       # Enable unbuffered output for Python
       - PYTHONUNBUFFERED=1
+      # Source-readiness guard (plan 261113): comma-separated expected source
+      # roots under input/; ingestion aborts when any is missing/empty.
+      - EXPECTED_SOURCES=${EXPECTED_SOURCES:-}
       # Provider (set to 'ollama' to use Ollama, 'openai' for OpenAI-compatible services)
       - PROVIDER=${PROVIDER:-openai}
       # qdrant
