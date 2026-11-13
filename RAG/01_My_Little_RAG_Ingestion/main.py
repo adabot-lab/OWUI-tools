@@ -1,7 +1,7 @@
 from pathlib import Path
 from tqdm import tqdm
 
-from config import INPUT_DIR, QDRANT_COLLECTION, validate_required_env
+from config import INPUT_DIR, QDRANT_COLLECTION, EXPECTED_SOURCES, MIGRATION_MARKER, validate_required_env
 from logger import logger
 from metadata import load_documents_incremental
 from chunking import (
@@ -13,22 +13,62 @@ from chunking import (
 from qdrant_ops import update_qdrant_index
 
 
+def check_source_readiness():
+    """Source-readiness guard (defect 4): refuse to scan when the input tree
+    does not look like the expected three-source layout.
+
+    A missing checkout or unmounted input root must be a hard abort, never a
+    mass deletion. Checked in the ingestion entry path itself, before any
+    scan/deletion diff.
+    """
+    input_path = Path(INPUT_DIR)
+    if not input_path.exists():
+        raise RuntimeError(
+            f"Input directory '{INPUT_DIR}' does not exist. "
+            "Refusing to run: a missing input root must never be read as mass deletion."
+        )
+    if not any(input_path.iterdir()):
+        raise RuntimeError(
+            f"Input directory '{INPUT_DIR}' is empty (unmounted volume?). "
+            "Refusing to run: an empty input root must never be read as mass deletion."
+        )
+
+    marker = input_path / MIGRATION_MARKER
+    if marker.exists():
+        raise RuntimeError(
+            f"Migration marker '{marker}' present: a migration/replacement is "
+            "in progress. Ingestion refuses to run against a source tree "
+            "under replacement."
+        )
+
+    missing = []
+    for rel in EXPECTED_SOURCES:
+        source = input_path / rel
+        if not source.exists() or not any(source.iterdir()):
+            missing.append(rel)
+    if missing:
+        raise RuntimeError(
+            "Expected source checkout(s) missing or empty: "
+            + ", ".join(missing)
+            + ". Refusing to run: this could read as mass deletion."
+        )
+    logger.log("Source-readiness guard passed")
+
+
 def main():
     """Main ingestion process"""
     validate_required_env()
     try:
         logger.log("Starting document ingestion")
         logger.log(f"Using collection: {QDRANT_COLLECTION}")
-        
+
+        # DEFECT 4: readiness gate BEFORE any scan / deletion diff.
+        check_source_readiness()
+
         # Clean up any pending chunks from failed previous runs
         logger.log("Cleaning up pending chunks from previous runs...")
         cleanup_pending_chunks()
         logger.log("Pending chunks cleanup completed")
-
-        input_path = Path(INPUT_DIR)
-        if not input_path.exists():
-            logger.log(f"Input directory '{INPUT_DIR}' does not exist", "ERROR")
-            return
 
         logger.log("Checking for new or changed documents...")
         new_docs, changed_doc_ids_by_collection = load_documents_incremental()
@@ -59,8 +99,13 @@ def main():
                 logger.log(f"Saving {len(collection_chunks)} chunks to collection {collection_name}...")
                 save_chunks_to_disk(collection_chunks, collection_name=collection_name)
 
-        logger.log("Loading embedding model...")
-        embeddings = get_embedding_function()
+        # DEFECT 1: deletion-only runs reach update_qdrant_index via the union
+        # of collections in qdrant_ops; they must NOT require an embedding
+        # endpoint. Load the model only when there is something to embed.
+        embeddings = None
+        if new_chunks:
+            logger.log("Loading embedding model...")
+            embeddings = get_embedding_function()
 
         logger.log("Updating Qdrant index...")
         update_qdrant_index(new_chunks, changed_doc_ids_by_collection, embeddings)

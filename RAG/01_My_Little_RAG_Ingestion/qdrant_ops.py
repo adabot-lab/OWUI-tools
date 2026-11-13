@@ -17,8 +17,71 @@ from config import (
     embedding_semaphore,
 )
 from logger import logger
-from metadata import mark_as_embedded
+from metadata import mark_as_embedded, acknowledge_pending_deletion_by_doc
 from chunking import move_chunks_from_pending
+
+
+class DeletionFailedError(RuntimeError):
+    """Raised when a Qdrant point deletion could not be verified as complete.
+
+    API error, nonzero remaining count or verification failure all land here.
+    The durable pending-deletion ledger entry is NOT acknowledged, so the next
+    run retries the deletion (defect 2 fix: failure, not warning).
+    """
+
+
+def _delete_doc_verified(client: QdrantClient, collection_name: str, doc_id: int):
+    """Delete all points for doc_id and VERIFY zero points remain.
+
+    Raises DeletionFailedError on API failure or nonzero remaining count.
+    """
+    try:
+        client.delete(
+            collection_name=collection_name,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="doc_id",
+                            match=MatchValue(
+                                value=int(doc_id)  # Ensure this is an integer to match stored type
+                            )
+                        )
+                    ]
+                )
+            ),
+            wait=True
+        )
+    except Exception as e:
+        raise DeletionFailedError(
+            f"Qdrant delete API failed for doc_id {doc_id} in collection {collection_name}: {e}"
+        ) from e
+
+    # VERIFY DELETION: check if any points remain after deletion
+    try:
+        remaining_points = client.count(
+            collection_name=collection_name,
+            count_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="doc_id",
+                        match=MatchValue(value=int(doc_id))
+                    )
+                ]
+            )
+        ).count
+    except Exception as verify_e:
+        raise DeletionFailedError(
+            f"Could not verify deletion for doc_id {doc_id} in collection "
+            f"{collection_name}: {verify_e}"
+        ) from verify_e
+
+    if remaining_points > 0:
+        raise DeletionFailedError(
+            f"{remaining_points} points still exist for doc_id {doc_id} "
+            f"after deletion in collection {collection_name}"
+        )
+    logger.log(f"Verified deletion of all points for doc_id {doc_id} in collection {collection_name}")
 
 
 def _create_collection_with_indexes(client: QdrantClient, collection_name: str):
@@ -114,15 +177,22 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
     client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=300)
 
     # Group chunks by collection
-    chunks_by_collection = {}
+    chunks_by_collection: dict[str, list] = {}
     for chunk in new_chunks:
         collection_name = chunk.get("collection_name", QDRANT_COLLECTION)  # Default to main collection if not specified
         if collection_name not in chunks_by_collection:
             chunks_by_collection[collection_name] = []
         chunks_by_collection[collection_name].append(chunk)
 
-    # Process each collection separately
-    for collection_name, collection_chunks in chunks_by_collection.items():
+    # DEFECT 1 FIX: process the UNION of collections that have new chunks and
+    # collections that only have deletions. A deletion-only collection (no new
+    # chunks) must still reach the deletion loop below.
+    all_collections = set(chunks_by_collection.keys()) | set(changed_doc_ids_by_collection.keys())
+    # Deterministic order for reproducible runs and tests.
+    ordered_collections = sorted(all_collections)
+
+    for collection_name in ordered_collections:
+        collection_chunks = chunks_by_collection.get(collection_name, [])
         # Check for force reindex environment variable
         force_reindex = os.getenv("FORCE_REINDEX", "false").lower() == "true"
 
@@ -136,9 +206,17 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
             # Check if vector configuration matches expected values
             dense_config = collection_info.config.params.vectors.get("dense")
             if not dense_config or dense_config.size != VECTOR_SIZE:
-                logger.log(f"Vector configuration mismatch, recreating collection {collection_name}", "WARNING")
-                client.delete_collection(collection_name=collection_name)
-                _create_collection_with_indexes(client, collection_name)
+                if force_reindex:
+                    logger.log(f"Vector configuration mismatch, recreating collection {collection_name}", "WARNING")
+                else:
+                    # Plan P1: ordinary reconciliation must NEVER delete/recreate
+                    # a collection. A vector-config mismatch is an operator
+                    # decision — abort loudly instead of silently wiping data.
+                    raise RuntimeError(
+                        f"Vector configuration mismatch for collection {collection_name} "
+                        f"(expected dense size {VECTOR_SIZE}). Refusing to delete/recreate "
+                        "during ordinary reconciliation; run with FORCE_REINDEX=true to rebuild."
+                    )
         else:
             logger.log(f"Creating new Qdrant collection: {collection_name}")
             try:
@@ -154,7 +232,9 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
         # Determine which doc ids to remove for THIS collection from the passed map
         collection_changed_doc_ids = changed_doc_ids_by_collection.get(collection_name, [])
 
-        # Clear entire collection if force reindexing
+        # Force reindex is an explicit operator action; it may delete/recreate.
+        # Ordinary reconciliation must NEVER delete/recreate a collection
+        # (plan P1: "no collection delete/recreate in ordinary reconciliation").
         if force_reindex:
             logger.log(f"Force reindex enabled: Clearing all points from collection {collection_name}...")
             try:
@@ -170,54 +250,31 @@ def update_qdrant_index(new_chunks: List[Dict[str, Any]], changed_doc_ids_by_col
 
                 logger.log(f"Collection {collection_name} recreated successfully for reindexing")
             except Exception as e:
-                logger.log(f"Warning: Failed to clear collection {collection_name} by recreation: {e}", "WARNING")
+                error_msg = f"Failed to clear collection {collection_name} by recreation: {e}"
+                logger.log(error_msg, "ERROR")
+                raise RuntimeError(error_msg) from e
         else:
             # Remove old points for changed documents (incremental update)
             if collection_changed_doc_ids:
                 logger.log(f"Removing old vectors for {len(collection_changed_doc_ids)} changed documents from collection {collection_name}...")
                 for doc_id in collection_changed_doc_ids:
+                    # DEFECT 2 FIX: verified two-phase deletion. The ledger entry
+                    # was already persisted by metadata.py BEFORE the path map was
+                    # dropped. Here we delete, verify zero remaining points, and
+                    # only then acknowledge (remove) the ledger entry. Any API
+                    # error, nonzero remaining count or verification failure raises
+                    # DeletionFailedError so the run fails and the ledger entry
+                    # survives for the next run's retry.
                     try:
-                        # Use FilterSelector to properly delete points by doc_id
-                        # Ensure both stored and queried doc_id are integers
-                        client.delete(
-                            collection_name=collection_name,
-                            points_selector=FilterSelector(
-                                filter=Filter(
-                                    must=[
-                                        FieldCondition(
-                                            key="doc_id",
-                                            match=MatchValue(
-                                                value=int(doc_id)  # Ensure this is an integer to match stored type
-                                            )
-                                        )
-                                    ]
-                                )
-                            ),
-                            wait=True
-                        )
-
-                        # VERIFY DELETION: Check if any points remain after deletion
-                        try:
-                            remaining_points = client.count(
-                                collection_name=collection_name,
-                                count_filter=Filter(
-                                    must=[
-                                        FieldCondition(
-                                            key="doc_id",
-                                            match=MatchValue(value=int(doc_id))
-                                        )
-                                    ]
-                                )
-                            ).count
-                            if remaining_points > 0:
-                                logger.log(f"Warning: {remaining_points} points still exist for doc_id {doc_id} after deletion in collection {collection_name}", "WARNING")
-                            else:
-                                logger.log(f"Verified deletion of all points for doc_id {doc_id} in collection {collection_name}")
-                        except Exception as verify_e:
-                            logger.log(f"Could not verify deletion for doc_id {doc_id} in collection {collection_name}: {verify_e}", "WARNING")
-
+                        _delete_doc_verified(client, collection_name, doc_id)
+                        # Verified success: acknowledge the durable intent.
+                        acknowledge_pending_deletion_by_doc(collection_name, doc_id)
+                    except DeletionFailedError:
+                        raise
                     except Exception as e:
-                        logger.log(f"Warning: Failed to delete old points for doc_id {doc_id} in collection {collection_name}: {e}", "WARNING")
+                        raise DeletionFailedError(
+                            f"Failed to delete doc_id {doc_id} in collection {collection_name}: {e}"
+                        ) from e
 
         # Add new points to this collection
         if collection_chunks:

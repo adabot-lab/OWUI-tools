@@ -7,13 +7,17 @@ services:
       - ./chunks:/app/chunks
       - ./metadata:/app/metadata
 
-    entrypoint: >
-      bash -c "
-        echo 'Running main.py with provider: ${PROVIDER:-openai}...';
-        PROVIDER=${PROVIDER:-openai} python main.py;
-        echo 'Ingestion complete. Container will now exit.';
-        exit 0
-      "
+    entrypoint: >-
+      bash -c '
+        echo "Running main.py with provider: $${PROVIDER:-openai}...";
+        PROVIDER=$${PROVIDER:-openai} python main.py;
+        rc=$$?;
+        if [ $$rc -ne 0 ]; then
+          echo "Ingestion FAILED (python exit $$rc). Container will exit nonzero.";
+          exit $$rc;
+        fi;
+        echo "Ingestion complete. Container will now exit."
+      '
     environment:
       # Enable unbuffered output for Python
       - PYTHONUNBUFFERED=1
