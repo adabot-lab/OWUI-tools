@@ -62,10 +62,10 @@ class StripMistralReasoningHandler(CustomLogger):
             "hermes-execute",
             "hermes-tasks",
             "hermes-vision",
-            "mistral-vibe-glm-5.3-flash(0.15/0.5)",
-            "mistral-vibe-deepseek-v4.1-flash(0.3/1.2)",
-            "mistral-vibe-glm-5.3(1.4/4.4)",
-            "mistral-vibe-mistral-large-4(0.7/2.1)",
+            "mistral-vibe-glm-5.3-flash",
+            "mistral-vibe-deepseek-v4.1-flash",
+            "mistral-vibe-glm-5.3",
+            "mistral-vibe-mistral-large-4",
             # Direct Mistral key (same api.mistral.ai strict schema):
             "mistral-mistral-large(0.5/1.5)",
             # Voxtral audio (2026-11-12): mistral-backed TTS/STT groups; the

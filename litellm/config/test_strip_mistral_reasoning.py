@@ -105,7 +105,7 @@ def test_non_member_groups_untouched():
 
 def test_body_level_reasoning_popped_any_form():
     for value in [False, True, {"effort": "low"}, "auto", None]:
-        for m in ("hermes-execute", "mistral-vibe-glm-5.3(1.4/4.4)"):
+        for m in ("hermes-execute", "mistral-vibe-glm-5.3"):
             d = _base(m, messages=[{"role": "user", "content": "hi"}])
             d["reasoning"] = value
             out = _run(d)

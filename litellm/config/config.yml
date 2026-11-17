@@ -95,14 +95,18 @@ model_list:
 
   - model_name: hermes-execute
     litellm_params:
-      model: mistral/zai-glm-5-3-flash
+      # Swapped 2026-11-17 (user-directed): zai-glm-5-3-flash ->
+      # deepseek-v4-1-flash-1017 (same upstream family as the renamed
+      # mistral-vibe-deepseek-v4.1-flash manual alias). Effort stays high
+      # (accepted live, probe 2026-11-17). Rollback: mistral/zai-glm-5-3-flash.
+      model: mistral/deepseek-v4-1-flash-1017
       api_key: os.environ/MISTRAL_VIBE_KEY
       drop_params: true
       extra_body:
         reasoning_effort: high
-      input_cost_per_token: 0.00000015         # $0.15 / 1M
-      output_cost_per_token: 0.0000005         # $0.50 / 1M
-      cache_read_input_token_cost: 0.00000003  # $0.03 / 1M cached
+      input_cost_per_token: 0.0000003          # $0.30 / 1M
+      output_cost_per_token: 0.0000012         # $1.20 / 1M
+      cache_read_input_token_cost: 0.000000007 # $0.007 / 1M cached
 
   # Legacy coding pair (opencode repinned to hermes-plan/hermes-tasks
   # 2026-10-31); kept as manual/rollback names on the main-key allowlist.
@@ -261,7 +265,9 @@ model_list:
   # Group names dash-prefixed → NOT registry-known → unknown client params
   # dropped via drop_params (zai thinking-kwarg discipline, litellm #31084/#31085).
   # NOTE: entries valid on .209 only until oracle litellm/.env gains MISTRAL_VIBE_KEY.
-  - model_name: mistral-vibe-glm-5.3-flash(0.15/0.5)
+  # Renamed 2026-11-17: price suffixes dropped from the four mistral-vibe
+  # alias names (prices live in the per-entry comments + vault table).
+  - model_name: mistral-vibe-glm-5.3-flash
     litellm_params:
       model: mistral/zai-glm-5-3-flash
       api_key: os.environ/MISTRAL_VIBE_KEY
@@ -270,7 +276,7 @@ model_list:
       output_cost_per_token: 0.0000005         # $0.50 / 1M
       cache_read_input_token_cost: 0.00000003  # $0.03 / 1M cached
 
-  - model_name: mistral-vibe-deepseek-v4.1-flash(0.3/1.2)
+  - model_name: mistral-vibe-deepseek-v4.1-flash
     litellm_params:
       model: mistral/deepseek-v4-1-flash-1017
       api_key: os.environ/MISTRAL_VIBE_KEY
@@ -281,7 +287,7 @@ model_list:
 
   # Z.ai GLM 5.3 (non-flash): text-only, 1M context, 128k max output.
   # Prices: docs.mistral.ai/models/zai-glm-5-3, checked 2026-11-02.
-  - model_name: mistral-vibe-glm-5.3(1.4/4.4)
+  - model_name: mistral-vibe-glm-5.3
     litellm_params:
       model: mistral/zai-glm-5-3
       api_key: os.environ/MISTRAL_VIBE_KEY
@@ -292,7 +298,7 @@ model_list:
 
   # Mistral Large 4 (26.10, public preview): multimodal, 1M context.
   # Prices: docs.mistral.ai/models/mistral-large-4-0, checked 2026-11-02.
-  - model_name: mistral-vibe-mistral-large-4(0.7/2.1)
+  - model_name: mistral-vibe-mistral-large-4
     litellm_params:
       model: mistral/mistral-large-4
       api_key: os.environ/MISTRAL_VIBE_KEY

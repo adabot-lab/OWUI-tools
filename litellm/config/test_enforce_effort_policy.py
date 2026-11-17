@@ -275,7 +275,7 @@ def test_non_managed_passthrough_byte_identical():
         "deepseek-v4-flash(0.14/0.28)",
         "deepseek-v4-pro(0.435/0.87)",
         "openrouter-zai-glm-4.7(0.38/1.98)",
-        "mistral-vibe-glm-5.3-flash(0.15/0.5)",
+        "mistral-vibe-glm-5.3-flash",
         "chatgpt-gpt-6.1-sol",
         "unknown-model",
         "",
