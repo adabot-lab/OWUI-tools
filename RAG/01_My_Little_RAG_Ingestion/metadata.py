@@ -13,9 +13,23 @@ from config import (
     CHUNKS_DIR,
     METADATA_FILE,
     QDRANT_COLLECTION,
+    PENDING_DELETIONS_FILE,
+    EXCLUDED_DIR_NAMES,
+    EXCLUDED_FILENAMES,
+    MASS_REMOVAL_THRESHOLD,
+    MASS_REMOVAL_MIN_COUNT,
+    MASS_REMOVAL_MANIFEST,
 )
 from logger import logger
 from chunking import remove_yaml_front_matter
+
+
+class MassRemovalError(RuntimeError):
+    """Raised when the mass-removal guard detects suspicious bulk deletion.
+
+    Signals a missing checkout / incomplete source replacement rather than
+    intentional deletion; the run aborts before any Qdrant deletion.
+    """
 
 
 def load_file_metadata() -> Dict[str, Any]:
@@ -40,6 +54,106 @@ def save_file_metadata(metadata: Dict[str, Any]):
         os.replace(temp_file, METADATA_FILE)
     except Exception as e:
         logger.log(f"Error saving metadata: {e}", "ERROR")
+
+# --- Pending-deletion ledger (durable, two-phase deletion commit) ---
+# Entries: {"<collection>:<file_key>": {"doc_id": int, "collection": str,
+#            "file": str, "requested_at": iso8601}}
+# The ledger is persisted BEFORE path-map entries are dropped, so a crash or
+# failed Qdrant deletion always leaves retryable state. An entry is removed
+# ONLY after Qdrant deletion is verified (zero remaining points).
+
+def load_pending_deletions() -> Dict[str, Dict[str, Any]]:
+    """Load the durable pending-deletion ledger from disk."""
+    try:
+        with open(PENDING_DELETIONS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.log(f"Could not load pending-deletion ledger: {e}", "ERROR")
+        return {}
+
+def record_pending_deletion(collection_name: str, file_key: str, doc_id: int):
+    """Persist deletion intent durably BEFORE dropping metadata/chunk mappings."""
+    ledger = load_pending_deletions()
+    ledger[f"{collection_name}:{file_key}"] = {
+        "doc_id": int(doc_id),
+        "collection": collection_name,
+        "file": file_key,
+        "requested_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    try:
+        os.makedirs(os.path.dirname(PENDING_DELETIONS_FILE), exist_ok=True)
+        temp_file = f"{PENDING_DELETIONS_FILE}.tmp"
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(ledger, f, ensure_ascii=False, indent=2)
+        os.replace(temp_file, PENDING_DELETIONS_FILE)
+        logger.log(f"Recorded pending deletion: {collection_name}:{file_key} (doc_id {doc_id})")
+    except Exception as e:
+        # Failing to persist intent is fatal: proceeding would risk losing the
+        # deletion (defect 2). Raise so the run aborts before any Qdrant call.
+        raise RuntimeError(
+            f"Could not persist pending-deletion ledger entry for "
+            f"{collection_name}:{file_key}: {e}"
+        )
+
+def acknowledge_pending_deletion(collection_name: str, file_key: str):
+    """Remove a ledger entry AFTER verified Qdrant deletion success."""
+    ledger = load_pending_deletions()
+    key = f"{collection_name}:{file_key}"
+    if key in ledger:
+        del ledger[key]
+        _save_pending_deletions(ledger)
+
+def acknowledge_pending_deletion_by_doc(collection_name: str, doc_id: int):
+    """Acknowledge every ledger entry for (collection, doc_id).
+
+    qdrant_ops only knows (collection, doc_id) at deletion time; the file key
+    lives in the ledger entry itself. Removes all matching entries (a doc_id
+    is unique per collection).
+    """
+    target = int(doc_id)
+    ledger = load_pending_deletions()
+    remaining = {}
+    removed = 0
+    for key, entry in ledger.items():
+        if entry.get("collection") == collection_name and int(entry.get("doc_id", -1)) == target:
+            removed += 1
+            continue
+        remaining[key] = entry
+    if removed:
+        _save_pending_deletions(remaining)
+        logger.log(f"Acknowledged {removed} pending deletion(s) for {collection_name} doc_id {target}")
+
+def _save_pending_deletions(ledger: Dict[str, Dict[str, Any]]):
+    try:
+        os.makedirs(os.path.dirname(PENDING_DELETIONS_FILE), exist_ok=True)
+        temp_file = f"{PENDING_DELETIONS_FILE}.tmp"
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(ledger, f, ensure_ascii=False, indent=2)
+        os.replace(temp_file, PENDING_DELETIONS_FILE)
+    except Exception as e:
+        # Failing to persist the ledger is fatal: an unacknowledged entry that
+        # silently vanishes would lose the deletion retry state (defect 2).
+        raise RuntimeError(f"Could not persist pending-deletion ledger: {e}") from e
+
+def is_path_excluded(path: Path) -> bool:
+    """True for repo internals / administrative documents that must never be ingested.
+
+    Excluded: any path component named in EXCLUDED_DIR_NAMES (e.g. .git) and
+    files whose name is in EXCLUDED_FILENAMES (e.g. README.md) at any depth.
+    Tolerates both absolute paths and input-relative keys ('input/...').
+    """
+    try:
+        parts = path.relative_to(Path(INPUT_DIR)).parts
+    except ValueError:
+        # Not under INPUT_DIR (e.g. stored relative key 'input/...'):
+        # strip a leading 'input' component if present and use the rest.
+        parts = path.parts[1:] if path.parts and path.parts[0] == "input" else path.parts
+    if any(part in EXCLUDED_DIR_NAMES for part in parts[:-1]):
+        return True
+    return path.name in EXCLUDED_FILENAMES
 
 def mark_as_embedded(file_keys: List[str], collection_name: str):
     """Mark files as successfully embedded (commit phase).
@@ -195,7 +309,12 @@ def get_next_doc_id(collection_name: str = None, stored_metadata: Dict[str, Any]
 def get_collection_name_from_path(file_path: Path) -> str:
     """Get collection name from file path based on subfolder, with sanitization"""
     # Get the parent directory relative to INPUT_DIR
-    relative_path = file_path.relative_to(INPUT_DIR)
+    try:
+        relative_path = file_path.relative_to(INPUT_DIR)
+    except ValueError:
+        # Tolerate stored input-relative keys ('input/...') alongside absolute paths
+        parts = file_path.parts[1:] if file_path.parts and file_path.parts[0] == "input" else file_path.parts
+        relative_path = Path(*parts) if parts else Path()
     # If file is directly in input dir (no subfolder), use default collection
     if len(relative_path.parts) <= 1:
         return QDRANT_COLLECTION
@@ -222,10 +341,19 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
     stored_metadata = load_file_metadata()
     current_metadata = {}
 
+    # Pre-existing metadata entries for paths the scanner no longer visits
+    # (excluded repo internals / admin docs) are carried forward unchanged —
+    # exclusion must never silently purge already-persisted state.
+    # The deleted-file diff below runs against scanned files only.
+
     # Group files by collection first
     files_by_collection = {}
     for path in Path(INPUT_DIR).rglob("*"):
         if path.suffix not in [".txt", ".md", ".html"]:
+            continue
+
+        # Explicit exclusion of repo internals and administrative documents.
+        if is_path_excluded(path):
             continue
 
         file_key = str(path)
@@ -430,17 +558,31 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
     if path_maps:
         current_metadata.setdefault('_path_maps', {}).update(path_maps)
 
-    # Check for deleted files (only if not force reindexing)
+    # Check for deleted files (only if not reindexing)
     if not force_reindex:
         deleted_files = set(stored_metadata.keys()) - set(current_metadata.keys())
-        for deleted_file in deleted_files:
+        # Internal bookkeeping keys ('_path_maps', '_counters') are not files.
+        deleted_files = {k for k in deleted_files if not k.startswith('_')}
+
+        # Phase 1 — classify each disappearance WITHOUT mutating anything.
+        # confirmed_gone = files that are excluded from processing, stat-verified
+        # gone, and not protected by the guards below.
+        confirmed_gone = []
+        for deleted_file in sorted(deleted_files):
+            # Exclusion semantics: a path that is now excluded (repo internals,
+            # admin docs) is NOT treated as deleted — its metadata is carried
+            # forward unchanged so pre-existing excluded entries are preserved.
+            if is_path_excluded(Path(deleted_file)):
+                current_metadata[deleted_file] = stored_metadata[deleted_file]
+                logger.log(f"Path now excluded, metadata preserved, not evicting: {deleted_file}", "INFO")
+                continue
             # Guard: verify the file is truly gone before evicting.
             # Do NOT use Path.exists() — it swallows OSError and returns False,
             # which would re-open the exact bug class being fixed (B4).
             try:
                 os.stat(deleted_file)
             except FileNotFoundError:
-                pass  # file really is gone – fall through to deletion handling
+                confirmed_gone.append(deleted_file)
             except OSError as e:
                 # Other stat failure (e.g. permissions): assume alive
                 current_metadata[deleted_file] = stored_metadata[deleted_file]
@@ -452,14 +594,52 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
                 logger.log(f"Path exists but was not scanned this run, not evicting: {deleted_file}", "WARNING")
                 continue
 
+        # Source-readiness: mass-removal guard. If a large fraction of the
+        # stored library disappeared this run, treat it as a missing source /
+        # incomplete replacement rather than intentional deletion: abort with
+        # a preview BEFORE any Qdrant deletion, ledger entry or metadata
+        # update (defect 4). Intentional large deletion requires a scoped
+        # reviewed manifest passed via MASS_REMOVAL_MANIFEST.
+        stored_count = len([k for k in stored_metadata if not k.startswith('_')])
+        removed_count = len(confirmed_gone)
+        allowance = max(MASS_REMOVAL_THRESHOLD * stored_count, MASS_REMOVAL_MIN_COUNT) if stored_count else 0
+        if removed_count > allowance:
+            manifest_prefixes = []
+            if MASS_REMOVAL_MANIFEST and os.path.exists(MASS_REMOVAL_MANIFEST):
+                with open(MASS_REMOVAL_MANIFEST, 'r', encoding='utf-8') as mf:
+                    manifest_prefixes = [
+                        line.strip() for line in mf if line.strip() and not line.startswith('#')
+                    ]
+            unmanifested = [
+                f for f in confirmed_gone
+                if not any(f.startswith(p) for p in manifest_prefixes)
+            ]
+            if unmanifested:
+                preview = "\n  ".join(unmanifested[:20])
+                more = f"\n  … and {len(unmanifested) - 20} more" if len(unmanifested) > 20 else ""
+                logger.log(
+                    f"MASS-REMOVAL GUARD: {removed_count} of {stored_count} files disappeared "
+                    f"(allowance {allowance:.0f}). This looks like a missing checkout or "
+                    f"an incomplete source replacement, not routine deletion. "
+                    f"Aborting before any Qdrant deletion. Preview of unmanifested removals:\n  "
+                    f"{preview}{more}",
+                    "ERROR",
+                )
+                raise MassRemovalError(
+                    f"{removed_count} files removed (allowance {allowance:.0f}); "
+                    f"{len(unmanifested)} not covered by a reviewed manifest"
+                )
+
+        # Phase 2 — process confirmed deletions. All files in confirmed_gone
+        # are stat-verified absent and below the mass-removal threshold.
+        for deleted_file in confirmed_gone:
             logger.log(f"File deleted: {deleted_file}")
-            # Determine which collection this file belonged to
             deleted_file_path = Path(deleted_file)
             collection_name = get_collection_name_from_path(deleted_file_path)
 
-            # Find and remove chunks for deleted files
-            # Need to load doc_id from the specific collection's chunks (both main and .pending)
-            # O1: map hit avoids the full collection rescan; scan only backfills first-run-after-upgrade
+            # Find the doc_id from the specific collection's chunks (both main
+            # and .pending). O1: map hit avoids the full collection rescan;
+            # scan only backfills first-run-after-upgrade.
             mapped_doc_id = stored_path_maps.get(collection_name, {}).get(deleted_file)
             if mapped_doc_id is not None:
                 path_to_doc_id = {deleted_file: mapped_doc_id}
@@ -467,7 +647,7 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
                 path_to_doc_id = {}
                 collection_chunks_dir = os.path.join(CHUNKS_DIR, collection_name)
                 pending_chunks_dir = os.path.join(collection_chunks_dir, ".pending")
-                
+
                 # Check main directory
                 if os.path.exists(collection_chunks_dir):
                     for chunk_file in Path(collection_chunks_dir).glob("*.json"):
@@ -481,7 +661,7 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
                                     path_to_doc_id[source_path] = chunk['doc_id']
                         except Exception as e:
                             logger.log(f"Could not read chunk file {chunk_file}: {e}", "WARNING")
-                
+
                 # Check .pending directory
                 if os.path.exists(pending_chunks_dir):
                     for chunk_file in Path(pending_chunks_dir).glob("*.json"):
@@ -498,11 +678,30 @@ def load_documents_incremental() -> tuple[List[Dict[str, Any]], Dict[str, List[i
 
             if deleted_file in path_to_doc_id:
                 doc_id_to_remove = path_to_doc_id[deleted_file]
+                # DURABILITY (defect 2): persist deletion intent BEFORE dropping
+                # the path-map entry or removing chunk files. Acknowledgement
+                # happens only after verified Qdrant success (qdrant_ops).
+                record_pending_deletion(collection_name, deleted_file, doc_id_to_remove)
                 # Record for deletion BEFORE removing chunk files (avoid timing issue)
                 changed_doc_ids_by_collection[collection_name].add(int(doc_id_to_remove))
                 remove_old_chunks(doc_id_to_remove, chunks_dir=CHUNKS_DIR, collection_name=collection_name)
                 stored_path_maps.get(collection_name, {}).pop(deleted_file, None)
                 logger.log(f"Marked doc_id {doc_id_to_remove} for removal from collection {collection_name}")
+
+    # DEFECT 2 retry: ledger entries persisted but never acknowledged (crash
+    # or failure before verified Qdrant deletion) are retried on every run,
+    # independent of the current scan diff — after a failed run the file key
+    # is already gone from stored metadata, so the scan diff alone would never
+    # re-produce the deletion.
+    for ledger_key, entry in load_pending_deletions().items():
+        ledger_collection = entry.get("collection")
+        try:
+            ledger_doc_id = int(entry.get("doc_id", -1))
+        except (TypeError, ValueError):
+            logger.log(f"Skipping malformed pending-deletion ledger entry: {ledger_key}", "WARNING")
+            continue
+        if ledger_collection and ledger_doc_id >= 0:
+            changed_doc_ids_by_collection[ledger_collection].add(ledger_doc_id)
 
     # Save updated metadata
     save_file_metadata(current_metadata)

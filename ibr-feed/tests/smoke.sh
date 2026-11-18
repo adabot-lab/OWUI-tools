@@ -76,3 +76,17 @@ PY
 wrong=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/wrong/leitsaetze.atom")
 test "$wrong" = 404
 printf 'wrong-token HTTP %s PASS\n' "$wrong"
+# Regression check for the B1 finding (t_e21e9a51): the access log must never
+# contain the feed token; uvicorn has to log /<redacted>/leitsaetze.atom.
+logs=$(docker logs ibr-feed-smoke 2>&1)
+tok=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+case "$logs" in
+  *"$tok"*) echo "smoke FAIL: feed token visible in container access log"; exit 1 ;;
+esac
+# uvicorn percent-quotes the path ('<' -> '%3C'), so decode before matching.
+decoded=$(printf '%s' "$logs" | sed 's/%3C/</g; s/%3E/>/g')
+case "$decoded" in
+  *"/<redacted>/leitsaetze.atom"*) ;;
+  *) echo "smoke FAIL: redacted path missing from container access log; last lines:"; printf '%s\n' "$logs" | tail -5; exit 1 ;;
+esac
+printf 'access-log redaction PASS\n'

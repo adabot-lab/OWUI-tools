@@ -35,3 +35,72 @@ Compose include-trees. Python-first. Deploy target: .209.
 - websearch-mcp serves reddit.com URLs through `reddit_backend.py`
   (anonymous .rss Atom feeds, rate-gated + cached); never route reddit
   through the browser/stealth escalation tiers — they cannot read comments.
+
+## Repo topology & RAG (fleet reference; topology 2026-11-03, ingestion guards 2026-11-13)
+
+- **Remotes:** `origin` = `git@github.com:adabot-lab/OWUI-tools.git` — the
+  authoritative remote per live `git remote -v`. `gdshadow01/OWUI-tools`
+  exists as `upstream` (fork parent); older notes naming `gdshadow01` as the
+  repo remote are stale.
+- **Branch truth:** local `dev` is authoritative and may run AHEAD of
+  `origin/dev` by design (local-only commits; no push without explicit user
+  instruction). Before trusting the remote-tracking ref, check live with
+  `git ls-remote origin dev`.
+- **Sparse checkout:** the local working tree excludes parts of the tracked
+  tree (`core.sparseCheckout=true`; e.g. all of `RAG/01_My_Little_RAG_Ingestion/`
+  is absent locally). Read excluded files via `git show dev:<path>`.
+- **`litellm/config/strip_hermes.py`:** LiteLLM pre-call hook that rewrites
+  "Hermes Agent"/"Hermes" -> "the agent" in system prompts before requests
+  to zai/glm models are forwarded (case-sensitive on purpose).
+- **RAG services** (include-trees pulled in by the root compose):
+  - `RAG/01_My_Little_RAG_Ingestion/` — one-shot ingestion service
+    `my-rag-ingest-only` (run from repo root:
+    `docker compose run --rm my-rag-ingest-only`; shared env `RAG/.env`,
+    symlinked as `RAG/01/.env`; batch-size knob `QDRANT_BATCH_SIZE`,
+    default 64, read in `qdrant_ops.py`). P1 correctness guards (live):
+    - **Source readiness:** `EXPECTED_SOURCES` (comma-separated roots
+      under `input/`) aborts ingestion when any listed root is missing
+      or empty. NOT a whitelist — the scanner still ingests all of
+      `input/`. Compose passes the var through explicitly
+      (`docker-compose.yml` environment entry; `.env` alone does NOT
+      reach the container).
+    - **Deletion durability:** `metadata/pending_deletions.json`
+      (outside `input/`) is persisted before the path-map drop and
+      acknowledged only after verified Qdrant deletion (delete +
+      `count == 0`); un-acked entries are retried idempotently; a
+      failed deletion exits nonzero — never a warning.
+    - **Deletion-only runs:** processed collections are the union of
+      new-chunk + deletion-bearing collections, so a pure-deletion run
+      needs no embedding endpoint.
+    - **Truthful exit codes:** the entrypoint propagates Python's real
+      exit code (`compose --exit-code-from` is now truthful).
+    - **Exclusions:** `.git` dirs and `README.md` files are never
+      ingested (`EXCLUDED_DIR_NAMES` / `EXCLUDED_FILENAMES`,
+      env-tunable); pre-existing metadata for excluded paths is carried
+      forward, not purged.
+    - **Vector-config safety:** a vector-config mismatch aborts;
+      collection recreation only with `FORCE_REINDEX=true`.
+    - **Mass-removal guard:** ingestion stops with a preview when
+      >= max(20% of stored files, 20 files) vanish, unless
+      `MASS_REMOVAL_MANIFEST` covers them.
+  - `RAG/02_My_Little_RAG/` — production retrieval service
+    (`my_little_rag-retrieval`; MCP + OpenAPI transports; reranker add-on
+    `reranker.py`, fails open).
+  - `RAG/03_My_Litte_RAG_Laws/` — laws corpus pipeline (the dir-name typo
+    "Litte" is real — keep it).
+  - `RAG/04_My_Little_RAG_qdrant/` — Qdrant storage service.
+- **Vergabe corpus delivery chain:** three Git authorities on Forgejo
+  (LAN): `Vergaberechtsprechung` (GitHub pull mirror, write path
+  GitHub-only), `vergabe-aufsaetze`, `vergabe-kommentare` (native, no
+  GitHub). Wodan publishes 07:00 (`cron-vergabe-sync.sh`: autopush ->
+  lit-publish -> mirror-sync); .209 pulls 07:30
+  (`vergabe-consumers-pull.sh`, read-only deploy keys, fail-closed
+  ff-only); ingestion 03:30 reads `input/` only. Input layout under
+  `input/Vergaberechtsprechung/`: `Rechtsprechung/Entscheidungsgründe`,
+  `Aufsätze`, `Kommentare` — all route to collection
+  `vergaberechtsprechung`.
+- **Qdrant collections (live 2026-11-03):** `vergaberechtsprechung` 14,085
+  points; `vault` 14,363; `user_manual_vergabeplattform` 1,894;
+  `vergabe_berlin-regelungen` 1,537; `openwebui-docs` 1,501;
+  `vergabe_howtos` 238; `distrobox-docs` 113;
+  `berlinovo_betriebsvereinbarungen` 79.

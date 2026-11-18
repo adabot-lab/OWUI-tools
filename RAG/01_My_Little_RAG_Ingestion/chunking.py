@@ -155,49 +155,109 @@ class _TokenBudgetAccumulator:
         return estimate_token_count(self.text())
 
 
+# German legal abbreviations whose period must never be treated as a sentence
+# ending (corpus is German-only). Order is irrelevant: the matcher alternation
+# is sorted longest-first at module load so longer forms always win
+# (e.g. 'i.S.v.' is matched whole, never as 'i' + stray 'S.v.').
+LEGAL_ABBREVIATIONS = [
+    'Abs', 'Nr', 'S', 'Ziff', 'Bsp', 'u.a', 'ff', 'z.B', 'Art', 'EG',
+    'u.U', 'd.h', 'i.S.v', 'z.T', 'usw', 'etc', 'vgl', 's.o', 's.u',
+    'f', 'm', 'o.k', 'g.g.A', 'u.g', 'i.H.v', 'i.V.m', 'z.G', 'sog',
+    '§§'  # Multiple paragraph symbols
+]
+
+_ABBR_SORTED = sorted(LEGAL_ABBREVIATIONS, key=len, reverse=True)
+
+# Matches one protected abbreviation INCLUDING its trailing period.
+# Built once at import; used by _protect_abbreviation_periods().
+_ABBR_DOT_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(a) for a in _ABBR_SORTED) + r')\.'
+)
+
+# Sentinel that replaces ONLY the final period of a protected abbreviation.
+# A control char is used deliberately: it cannot be produced by any real
+# corpus text, cannot match the sentence-boundary regex, and is stripped
+# again before any sentence is returned — so no marker can leak into chunks.
+_ABBR_DOT_SENTINEL = '\x00'
+
+# Splits BETWEEN sentences without consuming anything: the lookbehind keeps
+# the terminal punctuation (., !, ?) in the preceding sentence, so re-joining
+# sentences with ' ' reproduces the original text (modulo per-part whitespace).
+_SENTENCE_BOUNDARY_RE = re.compile(r'(?<=[.!?])(?=[\'"»\])]*\s)')
+
+
+def _protect_abbreviation_periods(text: str) -> str:
+    """Mask the final period of every known legal abbreviation.
+
+    Replaces exactly the '.' of e.g. 'Abs.' / 'S.' / 'i.V.m.' with the
+    sentinel character so the sentence splitter cannot treat it as a
+    sentence boundary. Single pass, no placeholder tokens — the original
+    period is restored by _restore_abbreviation_periods().
+    """
+    return _ABBR_DOT_RE.sub(
+        lambda m: m.group(0)[:-1] + _ABBR_DOT_SENTINEL, text
+    )
+
+
+def _restore_abbreviation_periods(text: str) -> str:
+    """Undo _protect_abbreviation_periods(). Lossless by construction."""
+    return text.replace(_ABBR_DOT_SENTINEL, '.')
+
+
 def split_sentences_respecting_bounds(text: str) -> List[str]:
-    """
-    Split text into sentences while respecting legal abbreviations and notation.
+    """Split text into sentences while respecting legal abbreviations and notation.
+
     This prevents splitting at abbreviations like 'Abs.', 'Nr.', etc. in legal texts.
+
+    Mechanism (single pass, no placeholder round-trip): the final period of
+    every abbreviation in LEGAL_ABBREVIATIONS is masked with a control
+    character the sentence-boundary regex cannot match, the text is split at
+    sentence boundaries WITHOUT consuming the punctuation (lookbehind-based),
+    and the masked periods are restored. Because no placeholder token ever
+    exists in the returned sentences and the splitter never consumes
+    characters, the round-trip is lossless: no '__ABBR_*__' artifact can be
+    produced under any input, and sentence-final punctuation is preserved
+    (e.g. '(BT-Drs. 18/6281, S. 119).' stays intact at a sentence end).
     """
-    # List of common German legal abbreviations that should not be treated as sentence endings
-    abbreviations = [
-        'Abs', 'Nr', 'S', 'Ziff', 'Bsp', 'u.a', 'ff', 'z.B', 'Art', 'EG',
-        'u.U', 'd.h', 'i.S.v', 'z.T', 'usw', 'etc', 'vgl', 's.o', 's.u',
-        'f', 'm', 'o.k', 'g.g.A', 'u.g', 'i.H.v', 'i.V.m', 'z.G', 'sog',
-        '§§'  # Multiple paragraph symbols
-    ]
+    protected = _protect_abbreviation_periods(text)
+    parts = _SENTENCE_BOUNDARY_RE.split(protected)
+    sentences = [_restore_abbreviation_periods(p).strip() for p in parts]
+    return [s for s in sentences if s]
 
-    # Create a pattern that matches sentence endings but excludes legal abbreviations
-    # This pattern looks for sentence ending punctuation followed by whitespace and capital letter
-    # but excludes known abbreviations
 
-    # First, protect abbreviations by replacing them with a placeholder
-    protected_text = text
-    placeholder_map = {}
+def pack_sentences_by_token_budget(
+    sentences: List[str], max_tokens: int = MAX_CHUNK_SIZE
+) -> List[str]:
+    """Pack whole sentences into chunks within the token budget.
 
-    for i, abbr in enumerate(abbreviations):
-        placeholder = f"__ABBR_{i}__"
-        # Use word boundaries to match abbreviations followed by a period
-        pattern = r'\b' + re.escape(abbr) + r'\.'
-        protected_text = re.sub(pattern, f"{placeholder}.", protected_text)
-        placeholder_map[placeholder] = abbr
-
-    # Now split on sentence boundaries (., !, ?) followed by whitespace and capital letter
-    # Also handle cases where sentences end with quotes or parentheses before the next capital
-    sentence_pattern = r'[.!?]+[\'"»\])]*\s+(?=[A-ZÄÖÜ])'
-    sentences = re.split(sentence_pattern, protected_text)
-
-    # Restore the original abbreviations
-    restored_sentences = []
-    for sentence in sentences:
-        restored_sentence = sentence
-        for placeholder, abbr in placeholder_map.items():
-            restored_sentence = restored_sentence.replace(f"{placeholder}.", f"{abbr}.")
-        restored_sentences.append(restored_sentence.strip())
-
-    # Filter out empty sentences
-    return [s for s in restored_sentences if s.strip()]
+    Greedy: appends whole sentences while they fit, starting a new chunk at
+    the exact sentence boundary otherwise. Guarantees that every returned
+    chunk ends at a sentence boundary (no mid-sentence cuts) — the only
+    exception is a single sentence whose own token count exceeds
+    ``max_tokens``, which is word-split as a last resort (an unbreakable
+    unit; splitting it mid-sentence is unavoidable without dropping text).
+    """
+    if not sentences:
+        return []
+    chunks: List[str] = []
+    sentence_counts = [estimate_token_count(s) for s in sentences]
+    acc = _TokenBudgetAccumulator(max_tokens, " ")
+    for i, sentence in enumerate(sentences):
+        stc = sentence_counts[i]
+        if stc > max_tokens:
+            # Unbreakable sentence: flush pending, then word-split it.
+            if acc.token_count() > 0:
+                chunks.append(acc.text())
+                acc = _TokenBudgetAccumulator(max_tokens, " ")
+            chunks.extend(_split_words_by_token_budget(sentence.split(), max_tokens))
+            continue
+        if not acc.add(sentence, stc):
+            chunks.append(acc.text())
+            acc = _TokenBudgetAccumulator(max_tokens, " ")
+            acc.add(sentence, stc)
+    if acc.token_count() > 0:
+        chunks.append(acc.text())
+    return chunks
 
 
 
@@ -286,12 +346,17 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
             token_count = estimate_token_count(para)
 
             if token_count > MAX_CHUNK_SIZE:
-                # Handle oversized paragraph by splitting it
-                # First, flush current accumulator if it has content
+                # Handle oversized paragraph by splitting it.
+                # First, flush current accumulator if it has content.
                 if para_acc.token_count() > 0:
                     chunk_text = para_acc.text()
                     if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
-                        for fb in _split_words_by_token_budget(chunk_text.split()):
+                        # Defensive: buffer text can only exceed the cap if
+                        # the accumulator state was inconsistent; pack it by
+                        # sentence so the flush still ends at a boundary.
+                        for fb in pack_sentences_by_token_budget(
+                            split_sentences_respecting_bounds(chunk_text)
+                        ):
                             processed_chunks.append({
                                 "doc_id": doc["doc_id"],
                                 "chunk_id": chunk_id,
@@ -311,107 +376,22 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                         chunk_id += 1
                     para_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, "\n\n")
 
-                # Try sentence-aware splitting first for legal texts
+                # Sentence-aware splitting (F3): pack whole sentences up to
+                # MAX_CHUNK_SIZE so no chunk ends mid-sentence. pack_sentences_
+                # by_token_budget word-splits only a single sentence that is
+                # itself longer than the cap (unbreakable unit).
                 sentences = split_sentences_respecting_bounds(para)
 
                 if len(sentences) > 1:
-                    # We have multiple sentences, try to group them respecting MAX_CHUNK_SIZE.
-                    # Cache per-sentence token counts so estimate_token_count
-                    # is called exactly once per sentence.
-                    sentence_counts = [estimate_token_count(s) for s in sentences]
-                    sent_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, " ")
-
-                    for i, sentence in enumerate(sentences):
-                        stc = sentence_counts[i]
-
-                        if stc > MAX_CHUNK_SIZE:
-                            # Individual sentence is too large; flush any
-                            # accumulated sentences first, then split by words.
-                            if sent_acc.token_count() > 0:
-                                chunk_text = sent_acc.text()
-                                if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
-                                    for fb in _split_words_by_token_budget(chunk_text.split()):
-                                        processed_chunks.append({
-                                            "doc_id": doc["doc_id"],
-                                            "chunk_id": chunk_id,
-                                            "text": fb,
-                                            "source": doc["source"],
-                                            "collection_name": doc.get("collection_name"),
-                                        })
-                                        chunk_id += 1
-                                else:
-                                    processed_chunks.append({
-                                        "doc_id": doc["doc_id"],
-                                        "chunk_id": chunk_id,
-                                        "text": chunk_text,
-                                        "source": doc["source"],
-                                        "collection_name": doc.get("collection_name"),
-                                    })
-                                    chunk_id += 1
-                                sent_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, " ")
-
-                            sentence_chunks = _split_words_by_token_budget(
-                                sentence.split()
-                            )
-                            for chunk_text in sentence_chunks:
-                                processed_chunks.append({
-                                    "doc_id": doc["doc_id"],
-                                    "chunk_id": chunk_id,
-                                    "text": chunk_text,
-                                    "source": doc["source"],
-                                    "collection_name": doc.get("collection_name"),
-                                })
-                                chunk_id += 1
-                        else:
-                            if not sent_acc.add(sentence, stc):
-                                # Flush current buffer, then add rejected sentence.
-                                chunk_text = sent_acc.text()
-                                if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
-                                    for fb in _split_words_by_token_budget(chunk_text.split()):
-                                        processed_chunks.append({
-                                            "doc_id": doc["doc_id"],
-                                            "chunk_id": chunk_id,
-                                            "text": fb,
-                                            "source": doc["source"],
-                                            "collection_name": doc.get("collection_name"),
-                                        })
-                                        chunk_id += 1
-                                else:
-                                    processed_chunks.append({
-                                        "doc_id": doc["doc_id"],
-                                        "chunk_id": chunk_id,
-                                        "text": chunk_text,
-                                        "source": doc["source"],
-                                        "collection_name": doc.get("collection_name"),
-                                    })
-                                    chunk_id += 1
-                                sent_acc = _TokenBudgetAccumulator(MAX_CHUNK_SIZE, " ")
-                                # Single sentence exceeding max would have been
-                                # caught above; this is just a normal add.
-                                sent_acc.add(sentence, stc)
-
-                    # Emit remaining sentences in buffer if any
-                    if sent_acc.token_count() > 0:
-                        chunk_text = sent_acc.text()
-                        if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
-                            for fb in _split_words_by_token_budget(chunk_text.split()):
-                                processed_chunks.append({
-                                    "doc_id": doc["doc_id"],
-                                    "chunk_id": chunk_id,
-                                    "text": fb,
-                                    "source": doc["source"],
-                                    "collection_name": doc.get("collection_name"),
-                                })
-                                chunk_id += 1
-                        else:
-                            processed_chunks.append({
-                                "doc_id": doc["doc_id"],
-                                "chunk_id": chunk_id,
-                                "text": chunk_text,
-                                "source": doc["source"],
-                                "collection_name": doc.get("collection_name"),
-                            })
-                            chunk_id += 1
+                    for chunk_text in pack_sentences_by_token_budget(sentences):
+                        processed_chunks.append({
+                            "doc_id": doc["doc_id"],
+                            "chunk_id": chunk_id,
+                            "text": chunk_text,
+                            "source": doc["source"],
+                            "collection_name": doc.get("collection_name"),
+                        })
+                        chunk_id += 1
                 else:
                     # Fallback to word-based splitting if no sentences were found.
                     # Token-aware so no chunk exceeds cap even for German compounds.
@@ -434,7 +414,11 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                     # Flush current accumulator, then add rejected paragraph.
                     chunk_text = para_acc.text()
                     if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
-                        for fb in _split_words_by_token_budget(chunk_text.split()):
+                        # Defensive: pack by sentence so the flush ends at a
+                        # sentence boundary (F3), never mid-sentence.
+                        for fb in pack_sentences_by_token_budget(
+                            split_sentences_respecting_bounds(chunk_text)
+                        ):
                             processed_chunks.append({
                                 "doc_id": doc["doc_id"],
                                 "chunk_id": chunk_id,
@@ -464,7 +448,11 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                 if para_acc.unit_token_sum() >= MIN_CHUNK_SIZE:
                     chunk_text = para_acc.text()
                     if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
-                        for fb in _split_words_by_token_budget(chunk_text.split()):
+                        # Defensive: pack by sentence so the flush ends at a
+                        # sentence boundary (F3), never mid-sentence.
+                        for fb in pack_sentences_by_token_budget(
+                            split_sentences_respecting_bounds(chunk_text)
+                        ):
                             processed_chunks.append({
                                 "doc_id": doc["doc_id"],
                                 "chunk_id": chunk_id,
@@ -488,7 +476,11 @@ def chunk_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
         if para_acc.token_count() > 0:
             chunk_text = para_acc.text()
             if estimate_token_count(chunk_text) > MAX_CHUNK_SIZE:
-                for fb in _split_words_by_token_budget(chunk_text.split()):
+                # Defensive: pack by sentence so the final flush ends at a
+                # sentence boundary (F3), never mid-sentence.
+                for fb in pack_sentences_by_token_budget(
+                    split_sentences_respecting_bounds(chunk_text)
+                ):
                     processed_chunks.append({
                         "doc_id": doc["doc_id"],
                         "chunk_id": chunk_id,

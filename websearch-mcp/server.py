@@ -752,6 +752,15 @@ async def search_reddit(
                       ensure_ascii=False, indent=2)
 
 
+def _safe_reddit_gate_status() -> dict:
+    """reddit_rss block for health_check — gate drift degrades, never crashes."""
+    try:
+        return reddit_gate_status()
+    except Exception as exc:  # gate-state drift must not kill health_check
+        return {"enabled": False, "cached_feeds": 0,
+                "error": f"gate status unavailable: {exc}"}
+
+
 @mcp.tool()
 async def health_check() -> str:
     """Check if the web search MCP server is healthy and which backends are available."""
@@ -780,7 +789,7 @@ async def health_check() -> str:
             except Exception:
                 pass
 
-    reddit = reddit_gate_status() if USE_REDDIT_BACKEND else {"enabled": False}
+    reddit = _safe_reddit_gate_status() if USE_REDDIT_BACKEND else {"enabled": False}
 
     status = {
         "status": "ok",

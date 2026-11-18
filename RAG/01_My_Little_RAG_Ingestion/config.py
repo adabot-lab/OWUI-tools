@@ -42,6 +42,41 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))    # Reserved: overlap betw
 # BM25 configuration
 BM25_LANGUAGE = os.getenv("BM25_LANGUAGE", "german")
 
+# --- Deletion durability & source-readiness (P1 correctness fixes) ---
+# Durable pending-deletion ledger. Lives in the metadata volume, OUTSIDE input.
+PENDING_DELETIONS_FILE = os.getenv(
+    "PENDING_DELETIONS_FILE", "metadata/pending_deletions.json"
+)
+
+# Scanner exclusions: repo internals and administrative documents are never
+# ingested. Pre-existing metadata entries for excluded paths are carried
+# forward unchanged (never silently purged) — see metadata.py.
+EXCLUDED_DIR_NAMES = tuple(
+    d for d in os.getenv("EXCLUDED_DIR_NAMES", ".git").split(",") if d
+)
+EXCLUDED_FILENAMES = tuple(
+    f for f in os.getenv("EXCLUDED_FILENAMES", "README.md").split(",") if f
+)
+
+# Source-readiness guard (checked in main() BEFORE any scan/deletion diff).
+# Comma-separated paths RELATIVE TO INPUT_DIR that must exist and be non-empty
+# (the expected checkouts / source roots). Empty = no expectation.
+EXPECTED_SOURCES = [
+    s for s in os.getenv("EXPECTED_SOURCES", "").split(",") if s.strip()
+]
+# Marker file (relative to INPUT_DIR) that aborts the run when present.
+MIGRATION_MARKER = os.getenv("MIGRATION_MARKER", ".migration_in_progress")
+
+# Mass-removal guard: a run whose deleted-file count is >= max(
+# MASS_REMOVAL_THRESHOLD * stored_files, MASS_REMOVAL_MIN_COUNT) stops with a
+# preview instead of treating the disappearance as intentional deletion.
+# Intentional large deletion requires a scoped reviewed manifest:
+# MASS_REMOVAL_MANIFEST points at a newline-separated file of path prefixes
+# (relative to INPUT_DIR, one per line) that are explicitly allowed to go.
+MASS_REMOVAL_THRESHOLD = float(os.getenv("MASS_REMOVAL_THRESHOLD", "0.2"))
+MASS_REMOVAL_MIN_COUNT = int(os.getenv("MASS_REMOVAL_MIN_COUNT", "20"))
+MASS_REMOVAL_MANIFEST = os.getenv("MASS_REMOVAL_MANIFEST", "")
+
 
 def validate_required_env():
     required = ["QDRANT_HOST", "QDRANT_COLLECTION", "EMBEDDING_MODEL_NAME", "PROVIDER"]

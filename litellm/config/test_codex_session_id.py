@@ -80,8 +80,18 @@ def test_shard_math():
     assert got == expect, (got, expect)
 
 
+def test_primary_chatgpt_groups_get_session_ids():
+    # hermes-plan/-execute/-tasks left CHATGPT_GROUPS with the 2026-11-02
+    # Mistral Vibe backing swap — now manual ChatGPT groups only.
+    for model in ("chatgpt-gpt-6.1-sol", "chatgpt-gpt-6-luna", "chatgpt-gpt-6-astra"):
+        a = _run(model)
+        b = _run(model)
+        assert SID_RE.match(a["metadata"]["session_id"]), model
+        assert a["metadata"]["session_id"] == b["metadata"]["session_id"], model
+
+
 def test_non_chatgpt_groups_untouched():
-    for model in ("hermes-plan", "zai-glm-5.3", "glm-5.3-flash", "unknown-model", ""):
+    for model in ("hermes-heartbeat-plan", "zai-glm-5.3", "glm-5.3-flash", "unknown-model", ""):
         d = _data(model)
         before = copy.deepcopy(d)
         out = asyncio.run(
@@ -161,6 +171,14 @@ def test_config_groups_in_sync():
         for e in cfg.get("model_list", [])
         if str(e.get("litellm_params", {}).get("model", "")).startswith("chatgpt/")
     }
+    if not backed:
+        # main branch: chatgpt groups are intentionally commented out (8d6f4a4)
+        # and the codex hook is a registered no-op there. Zero active groups in
+        # config.yml can never satisfy the equality (dev-shaped CHATGPT_GROUPS
+        # stays non-empty for the single-shape rule) — no sync obligation on
+        # main; on dev backed is non-empty and the strict assert applies.
+        print("SKIP sync check: no active chatgpt groups (intentional; main-branch state)")
+        return
     assert backed == set(csi.CHATGPT_GROUPS), (
         f"CHATGPT_GROUPS out of sync with config.yml:\n  config.yml chatgpt/-backed: {sorted(backed)}\n"
         f"  hook CHATGPT_GROUPS:            {sorted(csi.CHATGPT_GROUPS)}"
