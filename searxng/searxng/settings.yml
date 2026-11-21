@@ -196,3 +196,30 @@ engines:
   #BRAVE#   shortcut: br
   #BRAVE#   api_key: "__BRAVE_API_KEY__"
   #BRAVE#   disabled: false
+
+  # --- Exa Search API: OFF by default -----------------------------------
+  # Same runtime-generation mechanism as the Brave block above, gated on
+  # SEARXNG_EXA_API_KEY being non-empty (independent of Brave). This stanza is
+  # APPENDED to the upstream engine list by settings_loader, never merged with
+  # the upstream `exaapi` default (which keep_only drops first), so it inherits
+  # nothing and must be self-sufficient - `shortcut` in particular: an appended
+  # stanza without one crashes the engine.
+  # disabled: false keeps exaapi on the DEFAULT search path. That is required,
+  # not cosmetic: the websearch MCP calls SearXNG without an `engines` param, so
+  # a disabled engine would be invisible to every agent. To stop using Exa, flip
+  # the single `disabled:` line to true (or empty the key in .env); flip it back
+  # with `inactive:` still false.
+  # search_type: auto - NOT `lite` (not a valid SearchType on the deployed
+  # 2026.11.2 build and it silently drops results with no cached copy) and not
+  # `fast` (runs the lite search at auto's $7/1k price).
+  #EXA# - name: exaapi
+  #EXA#   engine: exaapi
+  #EXA#   shortcut: exa
+  #EXA#   api_key: "__EXA_API_KEY__"
+  #EXA#   categories: [general, web]
+  #EXA#   disabled: false
+  #EXA#   inactive: false
+  #EXA#   search_type: auto
+  #EXA#   content_mode: highlights
+  #EXA#   content_max_characters: 500
+  #EXA#   results_per_page: 10

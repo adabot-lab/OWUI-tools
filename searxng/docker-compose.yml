@@ -26,28 +26,83 @@ services:
     volumes:
       - ./searxng:/etc/searxng:rw
       - searxng-data:/var/cache/searxng:rw
-    # Brave Search API activation wrapper: when BRAVE_API_KEY (from .env) is
-    # non-empty, generate /run/searxng/settings.yml from the bind-mounted
-    # settings.yml (uncomment the #BRAVE# stanza, inject the key) and point
-    # SEARXNG_SETTINGS_PATH at it. The runtime file lives INSIDE the container,
-    # outside the ./searxng bind mount, so the repo directory is never touched.
-    # With an empty key nothing is generated and SearXNG boots straight from
-    # /etc/searxng/settings.yml with the engine set [duckduckgo, wikipedia,
-    # mwmbl]. Assumes the Brave key contains no sed-active characters
-    # (Brave keys are base62).
-    entrypoint: >-
-      sh -c 'if [ -n "$$SEARXNG_BRAVE_API_KEY" ]; then
-      mkdir -p /run/searxng
-      && sed -e "s|^  #BRAVE# |  |" -e "s|__BRAVE_API_KEY__|$$SEARXNG_BRAVE_API_KEY|"
-      /etc/searxng/settings.yml > /run/searxng/settings.yml
-      && cp /etc/searxng/limiter.toml /run/searxng/limiter.toml
-      && export SEARXNG_SETTINGS_PATH=/run/searxng/settings.yml;
-      fi;
-      exec /usr/local/searxng/entrypoint.sh'
+    # Search-API activation wrapper. Each backend activates independently:
+    # with the matching key non-empty, generate /run/searxng/settings.yml from
+    # the bind-mounted settings.yml (uncomment that key's stanza, inject the
+    # key) and point SEARXNG_SETTINGS_PATH at it. The runtime file lives INSIDE
+    # the container, outside the ./searxng bind mount, so the repo directory is
+    # never touched. With no key set nothing is generated and SearXNG boots
+    # straight from /etc/searxng/settings.yml (engine set [duckduckgo,
+    # wikipedia, mwmbl]) - byte-for-byte the unwrapped behaviour.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+
+        # Keys are injected into settings.yml below with sed. A key containing
+        # a character outside [A-Za-z0-9_-] could silently corrupt that file
+        # (sed replacement metacharacters: | & \ and newline), so refuse loudly
+        # instead - a failed boot is recoverable, a corrupt config is not.
+        check_key() {
+          case "$$2" in
+            *[!A-Za-z0-9_-]*)
+              echo "!!! ERROR: $$1 API key contains characters outside [A-Za-z0-9_-]; refusing to generate settings.yml - fix the key in .env" >&2
+              exit 1
+              ;;
+          esac
+        }
+
+        want_cfg=0
+        if [ -n "$${SEARXNG_BRAVE_API_KEY:-}" ]; then
+          check_key BRAVE "$${SEARXNG_BRAVE_API_KEY}"
+          want_cfg=1
+        fi
+        if [ -n "$${SEARXNG_EXA_API_KEY:-}" ]; then
+          check_key EXA "$${SEARXNG_EXA_API_KEY}"
+          want_cfg=1
+        fi
+
+        # No key at all: boot from the bind-mounted config exactly as an
+        # un-wrapped container would - nothing generated, path left unset.
+        if [ "$${want_cfg}" = 0 ]; then
+          exec /usr/local/searxng/entrypoint.sh
+        fi
+
+        mkdir -p /run/searxng
+        dst=/run/searxng/settings.yml
+        cp -f /etc/searxng/settings.yml "$${dst}"
+
+        # Per-key stanza expansion, independent of each other. The sed pattern
+        # side is constant; the replacement side only ever sees a value that
+        # passed check_key above.
+        if [ -n "$${SEARXNG_BRAVE_API_KEY:-}" ]; then
+          sed -i -e "s|^  #BRAVE# |  |" -e "s|__BRAVE_API_KEY__|$${SEARXNG_BRAVE_API_KEY}|" "$${dst}"
+          if grep -q "__BRAVE_API_KEY__" "$${dst}"; then
+            echo "!!! ERROR: BRAVE key placeholder survived generation in $${dst}; refusing to boot" >&2
+            exit 1
+          fi
+        fi
+        if [ -n "$${SEARXNG_EXA_API_KEY:-}" ]; then
+          sed -i -e "s|^  #EXA# |  |" -e "s|__EXA_API_KEY__|$${SEARXNG_EXA_API_KEY}|" "$${dst}"
+          if grep -q "__EXA_API_KEY__" "$${dst}"; then
+            echo "!!! ERROR: EXA key placeholder survived generation in $${dst}; refusing to boot" >&2
+            exit 1
+          fi
+        fi
+
+        # The config FOLDER moves with SEARXNG_SETTINGS_PATH, so every file
+        # SearXNG reads next to settings.yml must exist there too. Today that is
+        # limiter.toml only.
+        cp -f /etc/searxng/limiter.toml /run/searxng/limiter.toml
+
+        export SEARXNG_SETTINGS_PATH="$${dst}"
+        exec /usr/local/searxng/entrypoint.sh
     environment:
       - SEARXNG_BASE_URL=https://${SEARXNG_HOSTNAME:-localhost}/
       - "SEARXNG_SECRET=${SEARXNG_SECRET:?SEARXNG_SECRET missing - generate with: openssl rand -hex 24 (see .env.example)}"
       - SEARXNG_BRAVE_API_KEY=${BRAVE_API_KEY:-}
+      - SEARXNG_EXA_API_KEY=${EXA_API_KEY:-}
     logging:
       driver: "json-file"
       options:
