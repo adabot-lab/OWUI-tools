@@ -39,6 +39,22 @@ model_list:
       output_cost_per_token: 0.0000044       # $4.40 / 1M
       cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached input
 
+  # glm-5.4 released 2026-11-23 on Z.ai API (live on both general
+  # api.z.ai/api/paas/v4 and coding-plan endpoints, probed with ZAI_API_KEY
+  # 2026-11-23; Z.ai pricing docs lag the launch). Manual alias only — NOT
+  # on any hermes-* virtual. Dash prefix keeps the group non-registry-known.
+  # No published list price at add time: pricing ASSUMED = glm-5.3 until
+  # Z.ai publishes — revisit and correct when the rate card updates.
+  - model_name: zai-glm-5.4
+    litellm_params:
+      model: zai/glm-5.4
+      api_key: os.environ/ZAI_API_KEY
+      api_base: os.environ/ZAI_API_BASE
+      drop_params: true
+      input_cost_per_token: 0.0000014        # $1.40 / 1M (assumed = glm-5.3, checked 2026-11-23)
+      output_cost_per_token: 0.0000044       # $4.40 / 1M (assumed = glm-5.3)
+      cache_read_input_token_cost: 0.00000026  # $0.26 / 1M cached (assumed = glm-5.3)
+
   # Prefixed alias avoids registry-known bare-name parameter handling.
   # strip_thinking also removes unsupported client thinking kwargs.
   - model_name: zai-glm-5.3-flash
