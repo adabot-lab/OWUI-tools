@@ -80,11 +80,14 @@ EXPECTED_EFFORT = {
     "hermes-vision": ("mistral/", ("extra_body", "reasoning_effort"), "low"),
 }
 
+# codex_session_id.codex_session_id_hook removed from the head 2026-11-24
+# (ChatGPT sub end): its registration line is commented out together with the
+# chatgpt/ groups; re-activation re-adds it between strip_thinking and
+# strip_mistral_reasoning (vault Infra/LiteLLM ChatGPT re-activation).
 FROZEN_CALLBACK_HEAD = [
     "strip_hermes.strip_hermes_handler",
     "fallback_notify.fallback_notifier",
     "strip_thinking.strip_thinking_handler",
-    "codex_session_id.codex_session_id_hook",
     "strip_mistral_reasoning.strip_mistral_reasoning_handler",  # 2026-11-02: replayed-reasoning strip for mistral-backed groups
 ]
 
