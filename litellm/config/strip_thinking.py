@@ -44,6 +44,7 @@ class StripThinkingHandler(CustomLogger):
         {
             "zai-glm-5.3",
             "zai-glm-5.3-flash",
+            "zai-glm-5.4",
             "hermes-coding-plan",
             "hermes-coding-execute",
             "hermes-heartbeat-plan",
