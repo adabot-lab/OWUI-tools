@@ -35,6 +35,10 @@ Compose include-trees. Python-first. Deploy target: .209.
 - websearch-mcp serves reddit.com URLs through `reddit_backend.py`
   (anonymous .rss Atom feeds, rate-gated + cached); never route reddit
   through the browser/stealth escalation tiers — they cannot read comments.
+  **Upstream retired 2026-11:** Reddit ended RSS support (feeds → 404 since
+  2026-11-17, no replacement). The backend now degrades honestly with
+  `backend_unavailable`; do not "fix" a reddit 404 by re-adding escalation or
+  changing the feed URL shape — there is no working upstream.
 
 ## Repo topology & RAG (fleet reference; topology 2026-11-03, ingestion guards 2026-11-13)
 
