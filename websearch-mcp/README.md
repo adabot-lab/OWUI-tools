@@ -9,7 +9,7 @@ Uses the MCP Streamable HTTP protocol (spec version 2025-03-26) — the current 
 Exposes three MCP tools that Open WebUI can call directly:
 
 - **web_search** — queries SearXNG, returns ranked results with title, URL, and snippet
-- **search_reddit** — native Reddit search via public feeds (anonymous, no API key)
+- **search_reddit** — native Reddit search via public feeds (anonymous, no API key) — **retired upstream, returns an explicit error (see Reddit)**
 - **fetch_page** — retrieves a URL, strips boilerplate, returns clean text content
 - **health_check** — reports backend availability (which search engines are configured)
 
@@ -45,16 +45,31 @@ Optional **Apache Tika** integration for PDF/Office documents (set `TIKA_SERVER_
 
 ## Reddit
 
-`fetch_page` transparently serves reddit.com thread/subreddit/user URLs from
-Reddit's public Atom feeds (anonymous — no API key, no login), returning the
-post plus up to ~100 comments as markdown. Reddit's HTML/JSON endpoints are
-blocked from datacentre IPs, so this is the only reliable server-side route;
-a `"via": "reddit-rss"` field marks these responses.
+> **RETIRED UPSTREAM (verified 2026-11-25).** Reddit ended RSS support on
+> 2026-11-13 and the public Atom feeds stopped serving content around
+> 2026-11-17. Every feed URL — subreddit listing, thread (with or without the
+> post slug), user, search — now answers HTTP 404 with an Atom body
+> `<title>Not Found</title>`. Reddit's own announcement states there is no
+> replacement for non-moderators. `fetch_page` on a reddit.com URL therefore
+> returns an explicit `backend_unavailable` error instead of content, and
+> `search_reddit` returns the same error. Both degrade honestly: the backend
+> does not retry doomed requests (it remembers the retirement for
+> `FEED_GONE_TTL`, 15 min) and never reports an opaque `404 Not Found for url
+> …` string as if the caller's URL were malformed. `health_check` surfaces
+> `reddit_rss.upstream: "retired"` while that window is open. Set
+> `USE_REDDIT_BACKEND=no` to skip the backend entirely.
 
-Limits: anonymous feeds allow ~1 request/minute/IP shared across all reddit
-calls (fetch_page + search_reddit), served through a TTL cache. On a rate
-limit you get `{"error": ..., "retry_after": N}` — wait N seconds and retry.
-No scores or comment nesting (anonymous feeds don't carry them).
+Historical behaviour (kept in the code so a restoration is a one-line change):
+`fetch_page` served reddit.com thread/subreddit/user URLs from Reddit's public
+Atom feeds (anonymous — no API key, no login), returning the post plus up to
+~100 comments as markdown, marked with `"via": "reddit-rss"`. Thread feed URLs
+must carry the post slug; `_feed_url` builds `/r/<sub>/comments/<id>/<slug>/.rss`
+from the permalink rather than dropping the slug.
+
+Limits (if feeds ever return): ~1 request/minute/IP shared across all reddit
+calls, served through a TTL cache. On a rate limit you get
+`{"error": ..., "retry_after": N}` — wait N seconds and retry. No scores or
+comment nesting (anonymous feeds never carried them).
 
 ## Configuration
 

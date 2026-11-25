@@ -16,11 +16,29 @@ import server
 def test_parse_thread_with_slug_and_query():
     parsed = rb.parse_reddit_url(
         "https://www.reddit.com/r/LocalLLaMA/comments/1pwh0q9/best_local_llms_2025/?utm_source=x")
-    assert parsed == {"mode": "thread", "sub": "LocalLLaMA", "post_id": "1pwh0q9"}
+    assert parsed == {"mode": "thread", "sub": "LocalLLaMA", "post_id": "1pwh0q9",
+                      "slug": "best_local_llms_2025"}
 
 def test_parse_thread_no_slug():
     assert rb.parse_reddit_url("https://www.reddit.com/r/x/comments/abc123/") == {
-        "mode": "thread", "sub": "x", "post_id": "abc123"}
+        "mode": "thread", "sub": "x", "post_id": "abc123", "slug": None}
+
+def test_parse_thread_old_reddit_t_suffix_is_not_a_slug():
+    # old.reddit anchors comments with a bare "t" segment; it is not the slug
+    parsed = rb.parse_reddit_url("https://old.reddit.com/r/x/comments/abc/t/")
+    assert parsed == {"mode": "thread", "sub": "x", "post_id": "abc", "slug": None}
+
+def test_parse_thread_underscore_and_fullname_segments_are_not_slugs():
+    for url in ("https://www.reddit.com/r/x/comments/abc/_/",
+                "https://www.reddit.com/r/x/comments/abc/t1_cdef/"):
+        assert rb.parse_reddit_url(url)["slug"] is None
+
+def test_parse_thread_comment_permalink_keeps_post_slug():
+    # a comment permalink carries the post slug before the comment id
+    parsed = rb.parse_reddit_url(
+        "https://www.reddit.com/r/x/comments/abc/the_post_slug/def456/?context=3")
+    assert parsed["post_id"] == "abc"
+    assert parsed["slug"] == "the_post_slug"
 
 def test_parse_listing_plain():
     assert rb.parse_reddit_url("https://www.reddit.com/r/announcements/") == {
@@ -41,6 +59,7 @@ def test_parse_user_and_u_shortform():
 
 def test_parse_old_reddit_thread():
     assert rb.parse_reddit_url("https://old.reddit.com/r/x/comments/abc/t/")["mode"] == "thread"
+
 
 def test_parse_non_reddit_and_unknown_paths():
     assert rb.parse_reddit_url("https://example.com/r/x/comments/abc/") is None
@@ -109,6 +128,11 @@ def test_render_listing():
 
 
 def test_feed_urls():
+    # thread feeds must carry the post slug; dropping it was the reported 404
+    assert rb._feed_url({"mode": "thread", "sub": "x", "post_id": "abc",
+                         "slug": "the_post_title"}, 50) == \
+        "https://www.reddit.com/r/x/comments/abc/the_post_title/.rss?limit=50"
+    # slug-less input still yields a usable feed URL (Reddit tolerates it upstream)
     assert rb._feed_url({"mode": "thread", "sub": "x", "post_id": "abc"}, 50) == \
         "https://www.reddit.com/r/x/comments/abc/.rss?limit=50"
     assert rb._feed_url({"mode": "listing", "sub": "foo", "sort": "top", "time": "week"}, 25) == \
@@ -122,6 +146,23 @@ def test_feed_urls():
         "https://www.reddit.com/search.rss?")
 
 
+def test_feed_url_end_to_end_keeps_slug_from_real_url():
+    """Regression: the reported URL turned into a slug-less feed URL -> 404.
+
+    The whole chain (parse -> _feed_url) must preserve the slug, so a future
+    refactor cannot silently drop it again.
+    """
+    original = ("https://www.reddit.com/r/hermesagent/comments/1y4dzt3/"
+                "i_read_3_weeks_of_rhermesagent_and_matched_it_to/")
+    parsed = rb.parse_reddit_url(original)
+    feed_url = rb._feed_url(parsed, 100)
+    assert "i_read_3_weeks_of_rhermesagent_and_matched_it_to" in feed_url
+    assert feed_url == ("https://www.reddit.com/r/hermesagent/comments/1y4dzt3/"
+                        "i_read_3_weeks_of_rhermesagent_and_matched_it_to/.rss?limit=100")
+    # the slug-less form that was actually requested is never built from this URL
+    assert "/comments/1y4dzt3/.rss" not in feed_url
+
+
 # ── gate: rate limit + cache (injected clock/fetch, no network) ──────────────
 
 
@@ -131,8 +172,10 @@ class FakeClock:
 
 
 def _mk_gate():
-    gate = rb.RedditGate(min_interval=65.0, cache_ttl=600.0)
     clock = FakeClock()
+    # pass the injected clock into the gate so its own bookkeeping
+    # (feeds_gone_until, surfaced via gate_status) uses the same time domain
+    gate = rb.RedditGate(min_interval=65.0, cache_ttl=600.0, clock=clock)
     calls = []
 
     async def fetch(url):
@@ -210,6 +253,161 @@ def test_gate_status_before_and_after_gate_init(monkeypatch):
     assert status["min_interval_s"] == 65.0
     assert status["cache_ttl_s"] == 600.0
     assert status["last_success"] is not None
+
+
+# ── upstream retirement: honest degradation, no raw 404 ─────────────────────
+
+
+def test_feed_404_raises_feed_gone_not_httpx_error():
+    """A 404 must become _FeedGone, not a generic httpx message."""
+    def handler(request):
+        return httpx.Response(404, content=b"<feed><title>Not Found</title></feed>")
+
+    async def run():
+        transport = httpx.MockTransport(handler)
+        orig = httpx.AsyncClient
+        class Patched(orig):
+            def __init__(self, *a, **k):
+                k["transport"] = transport
+                super().__init__(*a, **k)
+        httpx.AsyncClient = Patched
+        try:
+            await rb._fetch_feed("https://www.reddit.com/r/x/.rss")
+        finally:
+            httpx.AsyncClient = orig
+
+    with pytest.raises(rb._FeedGone):
+        asyncio.run(run())
+
+
+def test_gate_404_reports_backend_unavailable_not_fetch_failed():
+    """Regression: the reported error was a bare httpx 404 path string."""
+    gate, clock, _calls_fetch, calls = _mk_gate()
+
+    async def fetch_gone(url):
+        calls.append(url)
+        raise rb._FeedGone(url)
+
+    entries, err = asyncio.run(gate.get("https://x/.rss", fetch_gone, clock))
+    assert entries is None
+    assert err["backend_unavailable"] is True
+    assert "retired" in err["error"]
+    # the opaque httpx phrasing must be gone
+    assert "Client error" not in err["error"]
+    assert "404 Not Found' for url" not in err["error"]
+    assert "reddit feed fetch failed" not in err["error"]
+
+
+def test_gate_remembers_gone_state_and_stops_probing():
+    """After a 404 the gate must not burn the 1/min window on every call."""
+    gate, clock, _f, calls = _mk_gate()
+
+    async def fetch_gone(url):
+        calls.append(url)
+        raise rb._FeedGone(url)
+
+    asyncio.run(gate.get("https://x/.rss", fetch_gone, clock))
+    assert len(calls) == 1
+
+    # a different URL, still inside the gone window: no new outbound request
+    entries, err = asyncio.run(gate.get("https://y/.rss", fetch_gone, clock))
+    assert entries is None and err["backend_unavailable"] is True
+    assert len(calls) == 1
+
+    # once the window elapses the gate probes upstream again
+    clock.t += rb.FEED_GONE_TTL + 1
+    entries, err = asyncio.run(gate.get("https://z/.rss", fetch_gone, clock))
+    assert len(calls) == 2
+
+
+def test_gate_gone_state_visible_in_status(monkeypatch):
+    gate, clock, _f, _c = _mk_gate()
+
+    async def fetch_gone(url):
+        raise rb._FeedGone(url)
+
+    asyncio.run(gate.get("https://x/.rss", fetch_gone))
+    monkeypatch.setattr(rb, "_gate", gate)
+    status = rb.gate_status()
+    assert status["upstream"] == "retired"
+    assert "retired" in status["upstream_note"]
+
+    # the flag clears once the gone window elapses
+    clock.t += rb.FEED_GONE_TTL + 1
+    assert "upstream" not in rb.gate_status()
+
+
+def test_cache_wins_over_gone_window():
+    """Cached entries stay served even after upstream goes dark."""
+    gate, clock, fetch, calls = _mk_gate()
+    asyncio.run(gate.get("https://x/.rss", fetch, clock))       # populate cache
+    gate.feeds_gone_until = clock() + rb.FEED_GONE_TTL          # upstream dies
+    entries, err = asyncio.run(gate.get("https://x/.rss", fetch, clock))
+    assert err is None and entries is not None and len(entries) == 2
+    assert len(calls) == 1                                      # no new request
+
+
+def test_fetch_reddit_degrades_to_honest_error(monkeypatch):
+    """End-to-end: a real 404 through fetch_reddit must not surface a 404 path.
+
+    Drives the whole chain — parse_reddit_url -> _feed_url -> gate -> _fetch_feed
+    (MockTransport returning Reddit's actual 404 Atom body) -> fetch_reddit.
+    """
+    def handler(request):
+        assert request.url.path.endswith(".rss")
+        return httpx.Response(
+            404, content=b"<feed><title>Not Found</title></feed>",
+            headers={"content-type": "application/atom+xml; charset=UTF-8"})
+
+    orig = httpx.AsyncClient
+
+    class Patched(orig):
+        def __init__(self, *a, **k):
+            k["transport"] = httpx.MockTransport(handler)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(httpx, "AsyncClient", Patched)
+    gate = rb.RedditGate(min_interval=65.0, cache_ttl=600.0, clock=FakeClock())
+    monkeypatch.setattr(rb, "_gate", gate)
+
+    url = ("https://www.reddit.com/r/hermesagent/comments/1y4dzt3/"
+           "i_read_3_weeks_of_rhermesagent_and_matched_it_to/")
+    parsed = rb.parse_reddit_url(url)
+    assert parsed is not None
+
+    out = asyncio.run(rb.fetch_reddit(parsed, url, 5000, 65.0, 600.0))
+
+    assert out["content_length"] == 0
+    assert out["backend_unavailable"] is True
+    assert "retired" in out["error"]
+    # the reported failure mode: an opaque httpx 404 path string
+    assert "Client error" not in out["error"]
+    assert "404 Not Found' for url" not in out["error"]
+    assert "reddit feed fetch failed" not in out["error"]
+
+
+def test_search_feeds_degrades_to_honest_error(monkeypatch):
+    """search_reddit must degrade the same way (same gate, same 404s)."""
+    def handler(request):
+        return httpx.Response(404, content=b"<feed><title>Not Found</title></feed>")
+
+    orig = httpx.AsyncClient
+
+    class Patched(orig):
+        def __init__(self, *a, **k):
+            k["transport"] = httpx.MockTransport(handler)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(httpx, "AsyncClient", Patched)
+    monkeypatch.setattr(rb, "_gate",
+                        rb.RedditGate(min_interval=65.0, cache_ttl=600.0,
+                                      clock=FakeClock()))
+
+    entries, err = asyncio.run(rb.search_feeds("q", "x", "new", "all", 10, 65.0, 600.0))
+    assert entries is None
+    assert err is not None and err["backend_unavailable"] is True
+    assert "retired" in err["error"]
+    assert "404 Not Found' for url" not in err["error"]
 
 
 # ── server integration ───────────────────────────────────────────────────────
